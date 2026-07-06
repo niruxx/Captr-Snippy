@@ -12,13 +12,21 @@ import io
 import json
 import math
 import os
+import shutil
+import subprocess
 import sys
+import tempfile
+import threading
+import time
 import tkinter as tk
+from ctypes import wintypes
 from tkinter import filedialog, messagebox, simpledialog
 from tkinter import font as tkfont
 from datetime import datetime
 
 from PIL import Image, ImageDraw, ImageFont, ImageGrab, ImageTk
+
+import imageio_ffmpeg
 
 
 def blend(hex1, hex2, t):
@@ -130,6 +138,39 @@ def strip_titlebar(root):
         return False
 
 
+# ---------------------------------------------------------------------------
+# HiDPI support - every widget dimension in this file is authored for a
+# 96 DPI (100% Windows scaling) screen. SCALE is the live per-monitor ratio
+# to that baseline; sc() converts an authored pixel value to physical
+# pixels so geometry keeps its intended size under 125/150/200%+ scaling.
+# ---------------------------------------------------------------------------
+SCALE = 1.0
+
+
+def get_dpi_scale(hwnd=None):
+    """Ratio of the current (per-monitor) DPI to the 96 DPI baseline."""
+    if sys.platform != "win32":
+        return 1.0
+    try:
+        user32 = ctypes.windll.user32
+        if hwnd and hasattr(user32, "GetDpiForWindow"):
+            dpi = user32.GetDpiForWindow(hwnd)
+        elif hasattr(user32, "GetDpiForSystem"):
+            dpi = user32.GetDpiForSystem()
+        else:
+            hdc = user32.GetDC(0)
+            dpi = ctypes.windll.gdi32.GetDeviceCaps(hdc, 90)  # LOGPIXELSY
+            user32.ReleaseDC(0, hdc)
+        return dpi / 96.0 if dpi else 1.0
+    except Exception:
+        return 1.0
+
+
+def sc(px):
+    """Scale an authored (96 DPI) pixel value to the current display."""
+    return max(1, round(px * SCALE))
+
+
 FORMATS = {"PNG": ".png", "JPEG": ".jpg", "WEBP": ".webp", "BMP": ".bmp"}
 LOSSY_FORMATS = ("JPEG", "WEBP")
 
@@ -140,6 +181,23 @@ ANNOT_WIDTHS = (2, 4, 8)
 HISTORY_LIMIT = 8
 UNDO_LIMIT = 8
 
+# video_ext, ffmpeg output args (codec chosen per-container: libx264 for the
+# MPEG-4/Matroska/FLV muxers, libvpx for WebM)
+VIDEO_FORMATS = {
+    "MP4":  (".mp4",  ["-c:v", "libx264", "-preset", "ultrafast",
+                        "-crf", "20", "-pix_fmt", "yuv420p"]),
+    "MKV":  (".mkv",  ["-c:v", "libx264", "-preset", "ultrafast",
+                        "-crf", "20", "-pix_fmt", "yuv420p"]),
+    "FLV":  (".flv",  ["-c:v", "libx264", "-preset", "ultrafast",
+                        "-crf", "20", "-pix_fmt", "yuv420p"]),
+    "WEBM": (".webm", ["-c:v", "libvpx", "-deadline", "realtime",
+                        "-cpu-used", "8", "-b:v", "6M"]),
+}
+RECORD_FPS_OPTIONS = (15, 30, 60, 120, 144, 165, 240)
+
+RECORD_HOTKEY_VK = ord("R")     # Ctrl+Alt+R - start / stop recording
+PAUSE_HOTKEY_VK = ord("P")      # Ctrl+Alt+P - pause / resume recording
+
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                              "settings.json")
 DEFAULT_SETTINGS = {
@@ -148,6 +206,8 @@ DEFAULT_SETTINGS = {
     "auto_copy": False,
     "quick_save_dir": os.path.join(os.path.expanduser("~"),
                                    "Pictures", "Snippy"),
+    "video_format": "MP4",
+    "record_fps": 30,
 }
 
 
@@ -164,6 +224,11 @@ def load_settings():
             settings["auto_copy"] = saved["auto_copy"]
         if isinstance(saved.get("quick_save_dir"), str) and saved["quick_save_dir"]:
             settings["quick_save_dir"] = saved["quick_save_dir"]
+        if saved.get("video_format") in VIDEO_FORMATS:
+            settings["video_format"] = saved["video_format"]
+        if isinstance(saved.get("record_fps"), int) and \
+                saved["record_fps"] in RECORD_FPS_OPTIONS:
+            settings["record_fps"] = saved["record_fps"]
     except (OSError, ValueError):
         pass
     return settings
@@ -177,41 +242,297 @@ def save_settings(settings):
         pass
 
 
-def round_points(x1, y1, x2, y2, r):
-    """Vertex list for a smooth-polygon rounded rectangle."""
-    return [
-        x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r,
-        x2, y2 - r, x2, y2, x2 - r, y2, x1 + r, y2,
-        x1, y2, x1, y2 - r, x1, y1 + r, x1, y1,
-    ]
-
-
 def ease_out(t):
     return 1 - (1 - t) ** 3
 
 
-def draw_panel(canvas, x1, y1, x2, y2, radius, fill, border=None, tags=""):
-    """Flat rounded panel - one smooth polygon, so no stray edge artifacts."""
-    r = max(1, min(radius, int(y2 - y1) // 2, int(x2 - x1) // 2))
-    canvas.create_polygon(round_points(x1, y1, x2, y2, r), smooth=True,
-                          fill=fill, outline=border or fill, tags=tags)
+ANNOTATION_FONT_CANDIDATES = {
+    "win32":  ("segoeui.ttf", "arial.ttf"),
+    "darwin": ("SFNSText", "Helvetica", "Arial"),
+}
+ANNOTATION_FONT_FALLBACK = ("DejaVuSans", "LiberationSans-Regular",
+                            "NotoSans-Regular", "Ubuntu-R")
+
+
+def load_annotation_font(size):
+    """Best-effort TrueType lookup by name so annotated text isn't drawn
+    with PIL's tiny bitmap default; falls back gracefully if none resolve."""
+    candidates = ANNOTATION_FONT_CANDIDATES.get(sys.platform,
+                                                ANNOTATION_FONT_FALLBACK)
+    for name in candidates:
+        try:
+            return ImageFont.truetype(name, size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
+def set_window_alpha(window, value):
+    """Best-effort window opacity; some Linux window managers reject it.
+    Returns whether the attribute was actually applied."""
+    try:
+        window.attributes("-alpha", value)
+        return True
+    except tk.TclError:
+        return False
+
+
+def get_window_alpha(window, default=1.0):
+    try:
+        return float(window.attributes("-alpha"))
+    except tk.TclError:
+        return default
+
+
+WDA_EXCLUDEFROMCAPTURE = 0x00000011
+
+
+def exclude_from_capture(window):
+    """Hide a Toplevel from screen-capture APIs (Windows 10 2004+), so the
+    floating recording controls never end up baked into the recording."""
+    if sys.platform != "win32":
+        return
+    try:
+        hwnd = _root_hwnd(window)
+        ctypes.windll.user32.SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
-# Fonts - prefer SF Pro when installed, fall back to Segoe UI
+# Global hotkeys - registered on a dedicated thread with its own Win32
+# message loop, since RegisterHotKey delivers WM_HOTKEY to the *thread* that
+# registered it and Tk's Tcl-driven loop never sees those messages.
+# ---------------------------------------------------------------------------
+WM_HOTKEY = 0x0312
+MOD_ALT = 0x0001
+MOD_CONTROL = 0x0002
+MOD_NOREPEAT = 0x4000
+
+
+class GlobalHotkeys:
+    """Registers a fixed set of system-wide hotkeys. `bindings` is a list of
+    (id, modifiers, vk, callback) tuples; callbacks fire on the hotkey
+    thread, so they should just hand off via `root.after(0, ...)`."""
+
+    def __init__(self, bindings):
+        self.bindings = bindings
+        self._thread = None
+        self._thread_id = None
+        self._ready = threading.Event()
+
+    def start(self):
+        if sys.platform != "win32":
+            return
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        self._ready.wait(2)
+
+    def stop(self):
+        if self._thread_id:
+            ctypes.windll.user32.PostThreadMessageW(self._thread_id, 0x0012,
+                                                     0, 0)  # WM_QUIT
+
+    def _run(self):
+        user32 = ctypes.windll.user32
+        self._thread_id = ctypes.windll.kernel32.GetCurrentThreadId()
+        registered = []
+        callbacks = {}
+        for hotkey_id, mods, vk, callback in self.bindings:
+            if user32.RegisterHotKey(None, hotkey_id, mods, vk):
+                registered.append(hotkey_id)
+                callbacks[hotkey_id] = callback
+        self._ready.set()
+        msg = wintypes.MSG()
+        try:
+            while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) != 0:
+                if msg.message == WM_HOTKEY:
+                    callback = callbacks.get(msg.wParam)
+                    if callback:
+                        callback()
+        finally:
+            for hotkey_id in registered:
+                user32.UnregisterHotKey(None, hotkey_id)
+
+
+# ---------------------------------------------------------------------------
+# Screen recording - frames are grabbed on a background thread and piped
+# into a bundled ffmpeg process, which handles the mp4/mkv/flv/webm muxing.
+# ---------------------------------------------------------------------------
+class ScreenRecorder:
+    """Captures the full virtual screen to a video file. Pausing simply
+    stops feeding frames to ffmpeg, so paused time never appears in the
+    output (no frozen frames, no gap to edit out)."""
+
+    def __init__(self, fps, codec_args, output_path, on_error=None):
+        self.fps = fps
+        self.codec_args = codec_args
+        self.output_path = output_path
+        self.on_error = on_error
+        self.is_recording = False
+        self.paused = False
+        self.size = None
+        self._proc = None
+        self._thread = None
+        self._stop_event = threading.Event()
+        self._start_time = None
+        self._paused_elapsed = 0.0
+        self._pause_started = None
+
+    def start(self):
+        probe = ImageGrab.grab(all_screens=True)
+        w, h = probe.size
+        w -= w % 2  # even dimensions required by yuv420p
+        h -= h % 2
+        self.size = (w, h)
+
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        cmd = [ffmpeg_exe, "-y", "-loglevel", "error",
+               "-f", "rawvideo", "-pix_fmt", "rgb24",
+               "-s", f"{w}x{h}", "-r", str(self.fps), "-i", "-",
+               *self.codec_args, "-r", str(self.fps), self.output_path]
+        creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        self._proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
+                                      stdout=subprocess.DEVNULL,
+                                      stderr=subprocess.DEVNULL,
+                                      creationflags=creationflags)
+        self.is_recording = True
+        self.paused = False
+        self._start_time = time.perf_counter()
+        self._paused_elapsed = 0.0
+        self._pause_started = None
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self):
+        w, h = self.size
+        interval = 1.0 / self.fps
+        next_frame = time.perf_counter()
+        try:
+            while not self._stop_event.is_set():
+                if self.paused:
+                    time.sleep(0.05)
+                    next_frame = time.perf_counter()
+                    continue
+                frame = ImageGrab.grab(all_screens=True)
+                if frame.size != self.size:
+                    frame = frame.crop((0, 0, w, h))
+                self._proc.stdin.write(frame.convert("RGB").tobytes())
+                next_frame += interval
+                sleep_time = next_frame - time.perf_counter()
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+                else:
+                    next_frame = time.perf_counter()
+        except (BrokenPipeError, OSError) as exc:
+            if self.on_error:
+                self.on_error(str(exc))
+
+    def pause(self):
+        if not self.paused:
+            self.paused = True
+            self._pause_started = time.perf_counter()
+
+    def resume(self):
+        if self.paused:
+            self.paused = False
+            self._paused_elapsed += time.perf_counter() - self._pause_started
+            self._pause_started = None
+
+    def elapsed(self):
+        if self._start_time is None:
+            return 0.0
+        now = time.perf_counter()
+        paused = self._paused_elapsed
+        if self.paused and self._pause_started:
+            paused += now - self._pause_started
+        return max(0.0, now - self._start_time - paused)
+
+    def stop(self):
+        self.is_recording = False
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=5)
+        if self._proc:
+            try:
+                self._proc.stdin.close()
+            except OSError:
+                pass
+            try:
+                self._proc.wait(timeout=20)
+            except subprocess.TimeoutExpired:
+                self._proc.kill()
+        return self.output_path
+
+
+# Supersample factor for anti-aliased chrome: tk's native polygon/oval fills
+# have no anti-aliasing on Windows, which shows up as jagged edges on round
+# shapes (most visibly the traffic-light dots). Draw shapes bigger with PIL,
+# which does anti-alias, then downsample - crisp edges at any DPI.
+AA_SUPERSAMPLE = 4
+
+
+def _round_rect_image(w, h, radius, fill, border=None, border_width=1):
+    w, h = max(1, round(w)), max(1, round(h))
+    ss = AA_SUPERSAMPLE
+    r = max(1, min(radius, h // 2, w // 2)) * ss
+    image = Image.new("RGBA", (w * ss, h * ss), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle([0, 0, w * ss - 1, h * ss - 1], radius=r,
+                           fill=hex_rgb(fill) + (255,),
+                           outline=hex_rgb(border or fill) + (255,),
+                           width=max(1, border_width * ss))
+    return image.resize((w, h), Image.Resampling.LANCZOS)
+
+
+def _circle_image(diameter, fill, border=None, border_width=1):
+    d = max(1, round(diameter))
+    ss = AA_SUPERSAMPLE
+    image = Image.new("RGBA", (d * ss, d * ss), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    inset = max(1, border_width * ss) / 2
+    draw.ellipse([inset, inset, d * ss - 1 - inset, d * ss - 1 - inset],
+                fill=hex_rgb(fill) + (255,) if fill else None,
+                outline=hex_rgb(border) + (255,) if border else None,
+                width=max(1, border_width * ss))
+    return image.resize((d, d), Image.Resampling.LANCZOS)
+
+
+def draw_panel(canvas, x1, y1, x2, y2, radius, fill, border=None, tags=""):
+    """Anti-aliased rounded panel, rendered as a supersampled PIL image so
+    corners stay smooth. Returns the PhotoImage - the caller must keep a
+    reference (Tk drops images with no live Python reference) e.g.
+    `self._panel_photo = draw_panel(...)`."""
+    x1, y1 = round(x1), round(y1)
+    image = _round_rect_image(x2 - x1, y2 - y1, radius, fill, border)
+    photo = ImageTk.PhotoImage(image)
+    canvas.create_image(x1, y1, image=photo, anchor="nw", tags=tags)
+    return photo
+
+
+# ---------------------------------------------------------------------------
+# Fonts - prefer SF Pro on macOS and Segoe UI on Windows; fall back to
+# whichever common Linux UI font is actually installed.
 # ---------------------------------------------------------------------------
 FONT = "Segoe UI"
 FONT_SEMI = "Segoe UI Semibold"
+
+FONT_CANDIDATES = ("Segoe UI", "SF Pro Display", "SF Pro Text",
+                   "Helvetica Neue", "Ubuntu", "Noto Sans", "Cantarell",
+                   "DejaVu Sans", "Liberation Sans")
 
 
 def init_fonts(root):
     global FONT, FONT_SEMI
     families = set(tkfont.families())
-    for family in ("SF Pro Display", "SF Pro Text", "Helvetica Neue"):
+    for family in FONT_CANDIDATES:
         if family in families:
             FONT = family
-            semi = family + " Semibold"
-            FONT_SEMI = semi if semi in families else family
+            semi = next((f"{family} {suffix}"
+                        for suffix in ("Semibold", "SemiBold", "Bold")
+                        if f"{family} {suffix}" in families), family)
+            FONT_SEMI = semi
             break
 
 
@@ -236,14 +557,16 @@ class GlassButton(tk.Canvas):
     def __init__(self, parent, text, command=None, variant="glass",
                  width=120, height=44, radius=None, font=None):
         self._bg = parent.cget("bg")
+        width, height = sc(width), sc(height)
         super().__init__(parent, width=width, height=height, bg=self._bg,
                          highlightthickness=0, cursor="hand2")
         self.command = command
         self.text = text
         self.variant = variant
         self.font = font or fnt_sb(10)
-        self.radius = radius if radius is not None else int(height) // 2
+        self.radius = sc(radius) if radius is not None else int(height) // 2
         self._cw, self._ch = int(width), int(height)
+        self._panel_photo = None
         self._glow = 0.0
         self._pressed = False
         self._selected = False
@@ -257,6 +580,10 @@ class GlassButton(tk.Canvas):
 
     def set_selected(self, selected):
         self._selected = selected
+        self._draw()
+
+    def set_text(self, text):
+        self.text = text
         self._draw()
 
     def _colors(self):
@@ -287,8 +614,8 @@ class GlassButton(tk.Canvas):
         fill, border, fg = self._colors()
         w, h = self._cw, self._ch
         if fill:
-            draw_panel(self, 1, 1, w - 1, h - 1, self.radius, fill,
-                       border=border)
+            self._panel_photo = draw_panel(self, 1, 1, w - 1, h - 1,
+                                           self.radius, fill, border=border)
         self.create_text(w // 2, h // 2, text=self.text, fill=fg,
                          font=self.font)
 
@@ -334,7 +661,9 @@ class GlassSegmented(tk.Canvas):
     def __init__(self, parent, options, value, command=None,
                  seg_width=86, height=38):
         self._bg = parent.cget("bg")
-        width = seg_width * len(options) + 2 * self.PAD
+        self.pad = sc(self.PAD)
+        seg_width, height = sc(seg_width), sc(height)
+        width = seg_width * len(options) + 2 * self.pad
         super().__init__(parent, width=width, height=height, bg=self._bg,
                          highlightthickness=0, cursor="hand2")
         self.options = list(options)
@@ -344,11 +673,13 @@ class GlassSegmented(tk.Canvas):
         self._cw, self._ch = int(width), int(height)
         self._tx = float(self._target_x(self.options.index(value)))
         self._anim = None
+        self._track_photo = None
+        self._thumb_photo = None
         self._draw()
         self.bind("<Button-1>", self._on_click)
 
     def _target_x(self, index):
-        return self.PAD + index * self.seg_width
+        return self.pad + index * self.seg_width
 
     def set_value(self, value):
         if value in self.options:
@@ -359,14 +690,15 @@ class GlassSegmented(tk.Canvas):
     def _draw(self):
         self.delete("all")
         w, h = self._cw, self._ch
-        draw_panel(self, 1, 1, w - 1, h - 1, h // 2, COL["seg_track"],
-                   border=COL["border"])
+        self._track_photo = draw_panel(self, 1, 1, w - 1, h - 1, h // 2,
+                                       COL["seg_track"], border=COL["border"])
         x1 = self._tx
-        y1, y2 = self.PAD + 1, h - self.PAD - 1
-        draw_panel(self, x1, y1, x1 + self.seg_width, y2, (y2 - y1) // 2,
-                   COL["seg_thumb"], border=COL["border_bright"])
+        y1, y2 = self.pad + 1, h - self.pad - 1
+        self._thumb_photo = draw_panel(
+            self, x1, y1, x1 + self.seg_width, y2, (y2 - y1) // 2,
+            COL["seg_thumb"], border=COL["border_bright"])
         for i, name in enumerate(self.options):
-            cx = self.PAD + i * self.seg_width + self.seg_width // 2
+            cx = self.pad + i * self.seg_width + self.seg_width // 2
             selected = name == self.value
             self.create_text(cx, h // 2, text=name,
                              fill=COL["text"] if selected
@@ -374,7 +706,7 @@ class GlassSegmented(tk.Canvas):
                              font=fnt_sb(9) if selected else fnt(9))
 
     def _on_click(self, event):
-        index = int((event.x - self.PAD) // self.seg_width)
+        index = int((event.x - self.pad) // self.seg_width)
         index = max(0, min(len(self.options) - 1, index))
         name = self.options[index]
         if name == self.value:
@@ -407,6 +739,7 @@ class GlassSwitch(tk.Canvas):
 
     def __init__(self, parent, value=False, command=None, width=50, height=30):
         self._bg = parent.cget("bg")
+        width, height = sc(width), sc(height)
         super().__init__(parent, width=width, height=height, bg=self._bg,
                          highlightthickness=0, cursor="hand2")
         self.value = bool(value)
@@ -414,6 +747,8 @@ class GlassSwitch(tk.Canvas):
         self._cw, self._ch = int(width), int(height)
         self._pos = 1.0 if self.value else 0.0  # knob position 0..1
         self._anim = None
+        self._track_photo = None
+        self._knob_photo = None
         self._draw()
         self.bind("<Button-1>", lambda e: self.toggle())
 
@@ -429,12 +764,15 @@ class GlassSwitch(tk.Canvas):
         p = self._pos
         track = blend(COL["glass_dim"], COL["accent"], p)
         border = blend(COL["border"], COL["accent"], p)
-        draw_panel(self, 1, 1, w - 1, h - 1, r, track, border=border)
-        kr = r - 4
+        self._track_photo = draw_panel(self, 1, 1, w - 1, h - 1, r, track,
+                                       border=border)
+        kr = r - sc(4)
         kx = r + p * (w - 2 * r)
         cy = h // 2
-        self.create_oval(kx - kr, cy - kr, kx + kr, cy + kr,
-                         fill="#FFFFFF", outline=COL["border_bright"])
+        self._knob_photo = ImageTk.PhotoImage(
+            _circle_image(2 * kr, "#FFFFFF", border=COL["border_bright"]))
+        self.create_image(kx - kr, cy - kr, image=self._knob_photo,
+                          anchor="nw")
 
     def _animate(self, target, steps=8):
         if self._anim:
@@ -462,12 +800,15 @@ class GlassSlider(tk.Canvas):
     def __init__(self, parent, from_=40, to=100, value=90, command=None,
                  width=300, height=36):
         self._bg = parent.cget("bg")
+        self.pad = sc(self.PAD)
+        width, height = sc(width), sc(height)
         super().__init__(parent, width=width, height=height, bg=self._bg,
                          highlightthickness=0, cursor="hand2")
         self.from_, self.to = from_, to
         self.value = value
         self.command = command
         self._cw, self._ch = int(width), int(height)
+        self._thumb_photo = None
         self._draw()
         self.bind("<Button-1>", self._on_drag)
         self.bind("<B1-Motion>", self._on_drag)
@@ -478,25 +819,29 @@ class GlassSlider(tk.Canvas):
         self._draw()
 
     def _thumb_x(self):
-        span = self._cw - 2 * self.PAD
+        span = self._cw - 2 * self.pad
         frac = (self.value - self.from_) / (self.to - self.from_)
-        return self.PAD + frac * span
+        return self.pad + frac * span
 
     def _draw(self):
         self.delete("all")
         cy = self._ch // 2
         tx = self._thumb_x()
-        self.create_line(self.PAD, cy, self._cw - self.PAD, cy,
-                         fill=blend(self._bg, COL["text"], 0.14), width=4,
+        lw = sc(4)
+        self.create_line(self.pad, cy, self._cw - self.pad, cy,
+                         fill=blend(self._bg, COL["text"], 0.14), width=lw,
                          capstyle="round")
-        self.create_line(self.PAD, cy, tx, cy,
-                         fill=COL["accent"], width=4, capstyle="round")
-        self.create_oval(tx - 9, cy - 9, tx + 9, cy + 9,
-                         fill="#FFFFFF", outline=COL["border_bright"])
+        self.create_line(self.pad, cy, tx, cy,
+                         fill=COL["accent"], width=lw, capstyle="round")
+        tr = sc(9)
+        self._thumb_photo = ImageTk.PhotoImage(
+            _circle_image(2 * tr, "#FFFFFF", border=COL["border_bright"]))
+        self.create_image(tx - tr, cy - tr, image=self._thumb_photo,
+                          anchor="nw")
 
     def _on_drag(self, event):
-        span = self._cw - 2 * self.PAD
-        frac = min(1.0, max(0.0, (event.x - self.PAD) / span))
+        span = self._cw - 2 * self.pad
+        frac = min(1.0, max(0.0, (event.x - self.pad) / span))
         new_value = round(self.from_ + frac * (self.to - self.from_))
         if new_value != self.value:
             self.value = new_value
@@ -510,12 +855,14 @@ class ColorDot(tk.Canvas):
 
     def __init__(self, parent, color, command=None, size=26):
         self._bg = parent.cget("bg")
+        size = sc(size)
         super().__init__(parent, width=size, height=size, bg=self._bg,
                          highlightthickness=0, cursor="hand2")
         self.color = color
         self.command = command
         self.size = size
         self.selected = False
+        self._photo = None
         self._draw()
         self.bind("<Button-1>",
                   lambda e: self.command and self.command(self.color))
@@ -527,13 +874,17 @@ class ColorDot(tk.Canvas):
     def _draw(self):
         self.delete("all")
         s = self.size
-        c = s // 2
-        r = s // 2 - 5
+        d = 2 * (s // 2 - 5)
+        canvas_img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
         if self.selected:
-            self.create_oval(c - r - 3, c - r - 3, c + r + 3, c + r + 3,
-                             outline=COL["accent"], width=2)
-        self.create_oval(c - r, c - r, c + r, c + r, fill=self.color,
-                         outline=COL["border_bright"])
+            ring = _circle_image(d + 6, None, border=COL["accent"],
+                                 border_width=2)
+            canvas_img.paste(ring, (s // 2 - (d + 6) // 2,
+                                    s // 2 - (d + 6) // 2), ring)
+        dot = _circle_image(d, self.color, border=COL["border_bright"])
+        canvas_img.paste(dot, (s // 2 - d // 2, s // 2 - d // 2), dot)
+        self._photo = ImageTk.PhotoImage(canvas_img)
+        self.create_image(0, 0, image=self._photo, anchor="nw")
 
 
 class WidthDot(tk.Canvas):
@@ -541,12 +892,14 @@ class WidthDot(tk.Canvas):
 
     def __init__(self, parent, width_value, command=None, size=26):
         self._bg = parent.cget("bg")
+        size = sc(size)
         super().__init__(parent, width=size, height=size, bg=self._bg,
                          highlightthickness=0, cursor="hand2")
         self.width_value = width_value
         self.command = command
         self.size = size
         self.selected = False
+        self._photo = None
         self._draw()
         self.bind("<Button-1>",
                   lambda e: self.command and self.command(self.width_value))
@@ -558,12 +911,17 @@ class WidthDot(tk.Canvas):
     def _draw(self):
         self.delete("all")
         s = self.size
-        c = s // 2
-        r = 2 + self.width_value
+        d = 2 * sc(2 + self.width_value)
         fill = COL["text"] if self.selected else COL["text_secondary"]
+        canvas_img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
         if self.selected:
-            self.create_oval(3, 3, s - 3, s - 3, outline=COL["accent"])
-        self.create_oval(c - r, c - r, c + r, c + r, fill=fill, outline="")
+            inset = sc(3)
+            ring = _circle_image(s - 2 * inset, None, border=COL["accent"])
+            canvas_img.paste(ring, (inset, inset), ring)
+        dot = _circle_image(d, fill)
+        canvas_img.paste(dot, (s // 2 - d // 2, s // 2 - d // 2), dot)
+        self._photo = ImageTk.PhotoImage(canvas_img)
+        self.create_image(0, 0, image=self._photo, anchor="nw")
 
 
 class Tooltip:
@@ -582,12 +940,12 @@ class Tooltip:
         if self.tip:
             return
         font = tkfont.Font(family=FONT, size=9)
-        w = font.measure(self.text) + 26
-        h = 28
+        w = font.measure(self.text) + sc(26)
+        h = sc(28)
         self.tip = tk.Toplevel(self.widget)
         self.tip.overrideredirect(True)
         self.tip.attributes("-topmost", True)
-        self.tip.attributes("-alpha", 0.97)
+        set_window_alpha(self.tip, 0.97)
         try:  # knock out the square corners around the pill
             self.tip.attributes("-transparentcolor", COL["bg"])
         except tk.TclError:
@@ -595,12 +953,13 @@ class Tooltip:
         canvas = tk.Canvas(self.tip, width=w, height=h, bg=COL["bg"],
                            highlightthickness=0)
         canvas.pack()
-        draw_panel(canvas, 1, 1, w - 1, h - 1, h // 2, COL["glass_high"],
-                   border=COL["border_bright"])
+        self._tip_photo = draw_panel(canvas, 1, 1, w - 1, h - 1, h // 2,
+                                     COL["glass_high"],
+                                     border=COL["border_bright"])
         canvas.create_text(w // 2, h // 2, text=self.text, fill=COL["text"],
                            font=font)
         x = self.widget.winfo_rootx() + self.widget.winfo_width() // 2
-        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + sc(6)
         self.tip.geometry(f"{w}x{h}+{x - w // 2}+{y}")
 
     def _schedule(self, _event):
@@ -627,12 +986,16 @@ class TrafficLights(tk.Canvas):
 
     def __init__(self, parent, commands):
         self._bg = parent.cget("bg")
-        w = 3 * self.D + 2 * self.GAP + 4
-        h = self.D + 4
+        self.d = sc(self.D)
+        self.gap = sc(self.GAP)
+        self.pad = sc(2)
+        w = 3 * self.d + 2 * self.gap + 2 * self.pad
+        h = self.d + 2 * self.pad
         super().__init__(parent, width=w, height=h, bg=self._bg,
                          highlightthickness=0, cursor="hand2")
         self.commands = commands  # (close, minimize, zoom)
         self._hover = False
+        self._photo = None
         self._draw()
         self.bind("<Enter>", lambda e: self._set_hover(True))
         self.bind("<Leave>", lambda e: self._set_hover(False))
@@ -643,32 +1006,41 @@ class TrafficLights(tk.Canvas):
         self._draw()
 
     def _draw(self):
+        """Rendered as one supersampled PIL image - tk's raw create_oval /
+        create_line have no anti-aliasing on Windows, which is what made the
+        dots (and their hover glyphs) look jagged at the edges."""
         self.delete("all")
-        d = self.D
+        w, h = int(self["width"]), int(self["height"])
+        ss = AA_SUPERSAMPLE
+        d, gap, pad = self.d, self.gap, self.pad
+        image = Image.new("RGBA", (w * ss, h * ss), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(image)
         for i, (fill, edge, glyph) in enumerate(self.DOTS):
-            x = 2 + i * (d + self.GAP)
-            y = 2
-            self.create_oval(x, y, x + d, y + d, fill=fill, outline=edge)
+            x = pad + i * (d + gap)
+            y = pad
+            draw.ellipse([x * ss, y * ss, (x + d) * ss - 1, (y + d) * ss - 1],
+                        fill=hex_rgb(fill) + (255,),
+                        outline=hex_rgb(edge) + (255,), width=ss)
             if not self._hover:
                 continue
-            cx, cy = x + d / 2, y + d / 2
-            r = d / 2 - 3.2
-            if i == 0:    # ×
-                self.create_line(cx - r, cy - r, cx + r, cy + r,
-                                 fill=glyph, width=1.4)
-                self.create_line(cx - r, cy + r, cx + r, cy - r,
-                                 fill=glyph, width=1.4)
-            elif i == 1:  # −
-                self.create_line(cx - r, cy, cx + r, cy,
-                                 fill=glyph, width=1.4)
-            else:         # +
-                self.create_line(cx - r, cy, cx + r, cy,
-                                 fill=glyph, width=1.4)
-                self.create_line(cx, cy - r, cx, cy + r,
-                                 fill=glyph, width=1.4)
+            cx, cy = (x + d / 2) * ss, (y + d / 2) * ss
+            r = (d / 2 - 3.2) * ss
+            lw = max(1, round(1.4 * ss))
+            g = hex_rgb(glyph) + (255,)
+            if i == 0:    # x
+                draw.line([cx - r, cy - r, cx + r, cy + r], fill=g, width=lw)
+                draw.line([cx - r, cy + r, cx + r, cy - r], fill=g, width=lw)
+            elif i == 1:  # minus
+                draw.line([cx - r, cy, cx + r, cy], fill=g, width=lw)
+            else:         # plus
+                draw.line([cx - r, cy, cx + r, cy], fill=g, width=lw)
+                draw.line([cx, cy - r, cx, cy + r], fill=g, width=lw)
+        image = image.resize((w, h), Image.Resampling.LANCZOS)
+        self._photo = ImageTk.PhotoImage(image)
+        self.create_image(0, 0, image=self._photo, anchor="nw")
 
     def _on_click(self, event):
-        index = int((event.x - 2) // (self.D + self.GAP))
+        index = int((event.x - self.pad) // (self.d + self.gap))
         index = max(0, min(2, index))
         self.commands[index]()
 
@@ -677,12 +1049,13 @@ class GlassCard(tk.Canvas):
     """Rounded pane with a hairline edge, hosting an inner frame."""
 
     def __init__(self, parent, height, radius=20, pad=18):
-        super().__init__(parent, height=height, bg=parent.cget("bg"),
+        super().__init__(parent, height=sc(height), bg=parent.cget("bg"),
                          highlightthickness=0)
-        self.radius = radius
-        self.pad = pad
+        self.radius = sc(radius)
+        self.pad = sc(pad)
         self.inner = tk.Frame(self, bg=COL["glass"])
         self._win = None
+        self._card_photo = None
         self.bind("<Configure>", self._redraw)
 
     def _redraw(self, _event=None):
@@ -690,9 +1063,9 @@ class GlassCard(tk.Canvas):
         if w < 2 * self.pad:
             return
         self.delete("card")
-        self.create_polygon(round_points(1, 1, w - 1, h - 1, self.radius),
-                            smooth=True, fill=COL["glass"],
-                            outline=COL["border"], tags="card")
+        self._card_photo = draw_panel(self, 1, 1, w - 1, h - 1, self.radius,
+                                      COL["glass"], border=COL["border"],
+                                      tags="card")
         self.tag_lower("card")
         if self._win is None:
             self._win = self.create_window(self.pad, self.pad, anchor="nw",
@@ -722,12 +1095,18 @@ class SnippyApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Snippy")
-        width, height = 1100, 700
+
+        global SCALE
+        SCALE = get_dpi_scale(_root_hwnd(root))
+        self.dpi_scale = SCALE
+        root.tk.call("tk", "scaling", SCALE * 96.0 / 72.0)
+
+        width, height = sc(1100), sc(800)
         x = (root.winfo_screenwidth() - width) // 2
         y = (root.winfo_screenheight() - height) // 2
         self.root.geometry(f"{width}x{height}+{x}+{y}")
-        self.root.minsize(960, 620)
-        self.root.attributes("-alpha", 0.0)  # faded in on launch
+        self.root.minsize(sc(960), sc(700))
+        set_window_alpha(self.root, 0.0)  # faded in on launch
 
         self.dark = system_dark_mode()
         set_theme(self.dark)
@@ -763,6 +1142,14 @@ class SnippyApp:
         self.selection_active = False
         self.start_x = self.start_y = self.end_x = self.end_y = 0
 
+        # screen-recording state
+        self.recorder = None
+        self._record_bar = None
+        self._record_bar_job = None
+        self._pause_btn = None
+        self._record_dot = None
+        self._record_timer_text = None
+
         # frameless window with custom traffic-light controls
         self._frameless = strip_titlebar(self.root)
         if self._frameless:
@@ -773,6 +1160,16 @@ class SnippyApp:
         self._bind_shortcuts()
         self._fade_in()
         self.root.after(THEME_POLL_MS, self._watch_theme)
+        self.root.after(THEME_POLL_MS, self._watch_dpi)
+
+        self.hotkeys = GlobalHotkeys([
+            (1, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, RECORD_HOTKEY_VK,
+             lambda: self.root.after(0, self.toggle_recording)),
+            (2, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, PAUSE_HOTKEY_VK,
+             lambda: self.root.after(0, self.toggle_pause_recording)),
+        ])
+        self.hotkeys.start()
+        self.root.protocol("WM_DELETE_WINDOW", self._close_window)
 
     def _build_ui(self):
         if getattr(self, "titlebar", None):
@@ -791,12 +1188,12 @@ class SnippyApp:
 
     # -- custom titlebar ------------------------------------------------------
     def _build_titlebar(self):
-        bar = tk.Frame(self.root, bg=COL["bg"], height=34)
+        bar = tk.Frame(self.root, bg=COL["bg"], height=sc(34))
         bar.pack(fill="x", side="top")
         bar.pack_propagate(False)
         lights = TrafficLights(bar, (self._close_window, self._minimize,
                                      self._toggle_zoom))
-        lights.pack(side="left", padx=(14, 0), pady=9)
+        lights.pack(side="left", padx=(sc(14), 0), pady=sc(9))
         title = tk.Label(bar, text="Snippy", bg=COL["bg"],
                          fg=COL["text_tertiary"], font=fnt_sb(9))
         title.place(relx=0.5, rely=0.5, anchor="center")
@@ -806,12 +1203,21 @@ class SnippyApp:
         self.titlebar = bar
 
     def _close_window(self):
-        alpha = float(self.root.attributes("-alpha")) - 0.15
-        if alpha <= 0:
-            self.root.destroy()
+        """Fade out then tear down - the single path all closes route through
+        (traffic-light X, Alt+F4, taskbar close) so every one gets the fade."""
+        alpha = get_window_alpha(self.root) - 0.09
+        if alpha <= 0 or not set_window_alpha(self.root, alpha):
+            self._on_close()
         else:
-            self.root.attributes("-alpha", alpha)
             self.root.after(16, self._close_window)
+
+    def _on_close(self):
+        if self.recorder:
+            self.recorder.stop()
+            self.recorder = None
+        if getattr(self, "hotkeys", None):
+            self.hotkeys.stop()
+        self.root.destroy()
 
     def _minimize(self):
         self.root.iconify()
@@ -858,7 +1264,48 @@ class SnippyApp:
         self.dark = dark
         set_theme(dark)
         self.root.configure(bg=COL["bg"])
-        self.root.attributes("-alpha", COL["alpha"])
+        set_window_alpha(self.root, COL["alpha"])
+
+        if self._toast_job:
+            self.root.after_cancel(self._toast_job)
+            self._toast_job = None
+        if self._toast:
+            self._toast.destroy()
+            self._toast = None
+
+        delay = self.delay_seg.value
+        status = self.status_var.get()
+        tool = self.tool
+        self.tool = None
+        self._drag_start = None
+        self._transitioning = False
+        self.container.destroy()
+        self._build_ui()
+        self.delay_seg.set_value(delay)
+        self.status_var.set(status)
+        if tool:
+            self.set_tool(tool)
+
+    # -- DPI switching (moving the window to a monitor with a different
+    # scaling factor) -------------------------------------------------------
+    def _watch_dpi(self):
+        scale = get_dpi_scale(_root_hwnd(self.root))
+        if abs(scale - self.dpi_scale) > 0.001:
+            self._apply_dpi(scale)
+        self.root.after(THEME_POLL_MS, self._watch_dpi)
+
+    def _apply_dpi(self, scale):
+        """Re-scale live: every widget size in this file is authored for a
+        96 DPI screen and multiplied by the global SCALE at construction
+        time, so picking up a new monitor's DPI just means rebuilding."""
+        global SCALE
+        SCALE = scale
+        self.dpi_scale = scale
+        self.root.tk.call("tk", "scaling", scale * 96.0 / 72.0)
+
+        width, height = sc(1100), sc(800)
+        self.root.minsize(sc(960), sc(700))
+        self.root.geometry(f"{width}x{height}")
 
         if self._toast_job:
             self.root.after_cancel(self._toast_job)
@@ -913,7 +1360,7 @@ class SnippyApp:
     # -- window / view transitions -----------------------------------------
     def _fade_in(self, alpha=0.0):
         alpha = min(alpha + 0.09, COL["alpha"])
-        self.root.attributes("-alpha", alpha)
+        set_window_alpha(self.root, alpha)
         if alpha < COL["alpha"]:
             self.root.after(16, self._fade_in, alpha)
 
@@ -966,7 +1413,12 @@ class SnippyApp:
                     font=fnt_sb(11)).pack(side="left", padx=(26, 8))
         GlassButton(top, "Full screen", command=self.start_fullscreen_capture,
                     variant="glass", width=120, height=44,
-                    font=fnt_sb(10)).pack(side="left", padx=(0, 12))
+                    font=fnt_sb(10)).pack(side="left", padx=(0, 8))
+        record_btn = GlassButton(top, "⏺  Record", command=self.toggle_recording,
+                                 variant="glass", width=120, height=44,
+                                 font=fnt_sb(10))
+        record_btn.pack(side="left", padx=(0, 12))
+        Tooltip(record_btn, "Start screen recording (Ctrl+Alt+R)")
         delay_box = tk.Frame(top, bg=COL["bg"])
         delay_box.pack(side="left")
         tk.Label(delay_box, text="Delay", bg=COL["bg"],
@@ -1003,8 +1455,8 @@ class SnippyApp:
             Tooltip(btn, tip)
             self.tool_buttons[name] = btn
 
-        tk.Frame(inner, bg=COL["border"], width=1, height=26
-                 ).pack(side="left", padx=10, pady=7)
+        tk.Frame(inner, bg=COL["border"], width=1, height=sc(26)
+                 ).pack(side="left", padx=sc(10), pady=sc(7))
         self.color_dots = {}
         for color in ANNOT_COLORS:
             dot = ColorDot(inner, color, command=self.set_color)
@@ -1012,8 +1464,8 @@ class SnippyApp:
             self.color_dots[color] = dot
         self.color_dots[self.annot_color].set_selected(True)
 
-        tk.Frame(inner, bg=COL["border"], width=1, height=26
-                 ).pack(side="left", padx=10, pady=7)
+        tk.Frame(inner, bg=COL["border"], width=1, height=sc(26)
+                 ).pack(side="left", padx=sc(10), pady=sc(7))
         self.width_dots = {}
         for w in ANNOT_WIDTHS:
             dot = WidthDot(inner, w, command=self.set_width)
@@ -1039,7 +1491,7 @@ class SnippyApp:
                  ).pack(side="right")
 
         # history rail
-        self.history_strip = tk.Frame(view, bg=COL["bg"], height=84)
+        self.history_strip = tk.Frame(view, bg=COL["bg"], height=sc(84))
         self.history_strip.pack(side="bottom", fill="x", padx=28, pady=(10, 0))
         self.history_strip.pack_propagate(False)
         self._render_history()
@@ -1061,8 +1513,9 @@ class SnippyApp:
         w, h = c.winfo_width(), c.winfo_height()
         if w < 40 or h < 40:
             return
-        draw_panel(c, 1, 1, w - 1, h - 1, 24, COL["glass_dim"],
-                   border=COL["border"])
+        self._preview_panel_photo = draw_panel(
+            c, 1, 1, w - 1, h - 1, sc(24), COL["glass_dim"],
+            border=COL["border"])
         if self.screenshot is None:
             self._scale = None
             c.create_text(w // 2, h // 2 - 14, text="\U0001F5BC",
@@ -1257,10 +1710,7 @@ class SnippyApp:
             return
         self._push_undo()
         size = max(16, round(14 + 3 * self.annot_width / (self._scale or 1.0)))
-        try:
-            font = ImageFont.truetype("segoeui.ttf", size)
-        except OSError:
-            font = ImageFont.load_default()
+        font = load_annotation_font(size)
         ImageDraw.Draw(self.screenshot).text(pos, text, fill=self.annot_color,
                                              font=font)
         self._commit()
@@ -1338,14 +1788,15 @@ class SnippyApp:
                      font=fnt(9)).pack(side="left", pady=28)
             return
         for i, image in enumerate(self.history):
-            item_w, item_h = 112, 70
+            item_w, item_h = sc(112), sc(70)
             item = tk.Canvas(self.history_strip, width=item_w, height=item_h,
                              bg=COL["bg"], highlightthickness=0,
                              cursor="hand2")
             item.pack(side="left", padx=(0, 10), pady=6)
             selected = i == self.history_index
-            draw_panel(item, 1, 1, item_w - 1, item_h - 1, 12, COL["glass"],
-                       border=COL["accent"] if selected else COL["border"])
+            item._photo = draw_panel(
+                item, 1, 1, item_w - 1, item_h - 1, sc(12), COL["glass"],
+                border=COL["accent"] if selected else COL["border"])
             thumb = image.copy()
             thumb.thumbnail((item_w - 12, item_h - 12),
                             Image.Resampling.LANCZOS)
@@ -1430,6 +1881,34 @@ class SnippyApp:
                  fg=COL["text_secondary"], font=fnt(9), anchor="w"
                  ).pack(fill="x", pady=(10, 0))
 
+        tk.Label(view, text="SCREEN RECORDING", bg=COL["bg"],
+                 fg=COL["text_tertiary"], font=fnt_sb(9)
+                 ).pack(anchor="w", padx=36, pady=(16, 8))
+
+        record_card = GlassCard(view, height=214)
+        record_card.pack(fill="x", padx=28)
+        inner = record_card.inner
+        tk.Label(inner, text="Video format", bg=COL["glass"],
+                 fg=COL["text"], font=fnt_sb(11)).pack(anchor="w")
+        self.video_format_seg = GlassSegmented(
+            inner, list(VIDEO_FORMATS), value=self.settings["video_format"],
+            command=self._set_video_format, seg_width=64)
+        self.video_format_seg.pack(anchor="w", pady=(8, 12))
+
+        tk.Label(inner, text="Frame rate", bg=COL["glass"],
+                 fg=COL["text"], font=fnt_sb(11)).pack(anchor="w")
+        self.fps_seg = GlassSegmented(
+            inner, [str(v) for v in RECORD_FPS_OPTIONS],
+            value=str(self.settings["record_fps"]),
+            command=self._set_record_fps, seg_width=52)
+        self.fps_seg.pack(anchor="w", pady=(8, 8))
+        tk.Label(inner, text="Match your display's refresh rate for the "
+                            "smoothest capture (higher rates need more CPU "
+                            "and disk space) · Ctrl+Alt+R starts/stops, "
+                            "Ctrl+Alt+P pauses/resumes, from anywhere.",
+                 bg=COL["glass"], fg=COL["text_secondary"], wraplength=460,
+                 justify="left", font=fnt(9)).pack(anchor="w")
+
         tk.Label(view, text="Settings are saved automatically · "
                             "theme follows the Windows light/dark setting.",
                  bg=COL["bg"], fg=COL["text_tertiary"],
@@ -1446,6 +1925,14 @@ class SnippyApp:
 
     def _set_auto_copy(self, value):
         self.settings["auto_copy"] = value
+        save_settings(self.settings)
+
+    def _set_video_format(self, name):
+        self.settings["video_format"] = name
+        save_settings(self.settings)
+
+    def _set_record_fps(self, value):
+        self.settings["record_fps"] = int(value)
         save_settings(self.settings)
 
     def _choose_quick_save_dir(self):
@@ -1465,12 +1952,12 @@ class SnippyApp:
             self._toast.destroy()
 
         font = tkfont.Font(family=FONT, size=10)
-        w = min(font.measure(message) + 52, 440)
-        h = 44
+        w = min(font.measure(message) + sc(52), sc(440))
+        h = sc(44)
         bar = tk.Canvas(self.root, width=w, height=h, bg=COL["bg"],
                         highlightthickness=0)
-        draw_panel(bar, 1, 1, w - 1, h - 1, h // 2, COL["glass_high"],
-                   border=COL["border_bright"])
+        bar._photo = draw_panel(bar, 1, 1, w - 1, h - 1, h // 2,
+                                COL["glass_high"], border=COL["border_bright"])
         bar.create_text(w // 2, h // 2, text=message, fill=COL["text"],
                         font=font)
         self._toast = bar
@@ -1544,7 +2031,7 @@ class SnippyApp:
 
     def _create_overlay(self):
         self.overlay_window = tk.Toplevel(self.root)
-        self.overlay_window.attributes("-alpha", 0.35)
+        set_window_alpha(self.overlay_window, 0.35)
         self.overlay_window.attributes("-topmost", True)
         self.overlay_window.overrideredirect(True)
 
@@ -1633,6 +2120,160 @@ class SnippyApp:
         self._set_status(
             f"Captured {x2 - x1} × {y2 - y1} px · ready to annotate or save")
 
+    # -- screen recording ----------------------------------------------------
+    def toggle_recording(self):
+        if self.recorder and self.recorder.is_recording:
+            self.stop_recording()
+        else:
+            self.start_recording()
+
+    def start_recording(self):
+        if self.recorder and self.recorder.is_recording:
+            return
+        folder = self.settings["quick_save_dir"]
+        try:
+            os.makedirs(folder, exist_ok=True)
+        except OSError as exc:
+            messagebox.showerror("Error", f"Cannot create folder: {exc}")
+            return
+
+        fmt = self.settings["video_format"]
+        ext, codec_args = VIDEO_FORMATS[fmt]
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = os.path.join(folder, f"recording_{timestamp}{ext}")
+
+        recorder = ScreenRecorder(self.settings["record_fps"], codec_args,
+                                  output_path, on_error=self._on_record_error)
+        try:
+            recorder.start()
+        except Exception as exc:
+            messagebox.showerror("Error", f"Failed to start recording: {exc}")
+            return
+        self.recorder = recorder
+        self.root.withdraw()
+        self._show_record_bar()
+        self._set_status("Recording…")
+
+    def stop_recording(self, discard=False):
+        if not self.recorder:
+            return
+        recorder = self.recorder
+        self.recorder = None
+        path = recorder.stop()
+        self._hide_record_bar()
+        self.root.deiconify()
+        if discard:
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+            self._set_status("Recording discarded")
+            return
+        self._set_status(f"Recording saved · {os.path.basename(path)}")
+        self.show_toast(f"Saved recording · {os.path.basename(path)}")
+
+    def toggle_pause_recording(self):
+        if not self.recorder or not self.recorder.is_recording:
+            return
+        if self.recorder.paused:
+            self.recorder.resume()
+        else:
+            self.recorder.pause()
+        self._update_record_bar_state()
+
+    def _on_record_error(self, message):
+        self.root.after(0, lambda: self._handle_record_error(message))
+
+    def _handle_record_error(self, message):
+        if not self.recorder:
+            return
+        self.stop_recording(discard=True)
+        messagebox.showerror("Recording error", message)
+
+    def _show_record_bar(self):
+        w, h = sc(264), sc(56)
+        bar = tk.Toplevel(self.root)
+        bar.overrideredirect(True)
+        bar.attributes("-topmost", True)
+        set_window_alpha(bar, 0.96)
+        x = (bar.winfo_screenwidth() - w) // 2
+        bar.geometry(f"{w}x{h}+{x}+{sc(18)}")
+        canvas = tk.Canvas(bar, width=w, height=h, bg=COL["bg"],
+                           highlightthickness=0)
+        canvas.pack(fill="both", expand=True)
+        self._record_bar_photo = draw_panel(
+            canvas, 1, 1, w - 1, h - 1, h // 2, COL["glass_high"],
+            border=COL["border_bright"])
+        dr = sc(6)
+        self._record_dot = canvas.create_oval(
+            sc(20), h // 2 - dr, sc(20) + 2 * dr, h // 2 + dr,
+            fill=COL["error"], outline="")
+        self._record_timer_text = canvas.create_text(
+            sc(42), h // 2, anchor="w", text="00:00", fill=COL["text"],
+            font=fnt_sb(11))
+
+        controls = tk.Frame(canvas, bg=COL["glass_high"])
+        canvas.create_window(w - sc(8), h // 2, anchor="e", window=controls)
+        self._pause_btn = GlassButton(controls, "⏸", command=self.toggle_pause_recording,
+                                      variant="plain", width=36, height=36,
+                                      radius=18, font=("Segoe UI Symbol", 12))
+        self._pause_btn.pack(side="left", padx=2)
+        Tooltip(self._pause_btn, "Pause / resume (Ctrl+Alt+P)")
+        stop_btn = GlassButton(controls, "⏹", command=self.stop_recording,
+                               variant="plain", width=36, height=36, radius=18,
+                               font=("Segoe UI Symbol", 12))
+        stop_btn.pack(side="left", padx=2)
+        Tooltip(stop_btn, "Stop recording (Ctrl+Alt+R)")
+
+        for widget in (bar, canvas):
+            widget.bind("<Button-1>", self._record_bar_press)
+            widget.bind("<B1-Motion>", self._record_bar_drag)
+        exclude_from_capture(bar)
+
+        self._record_bar = bar
+        self._tick_record_bar()
+
+    def _record_bar_press(self, event):
+        self._record_bar_origin = (event.x_root - self._record_bar.winfo_x(),
+                                   event.y_root - self._record_bar.winfo_y())
+
+    def _record_bar_drag(self, event):
+        dx, dy = self._record_bar_origin
+        self._record_bar.geometry(
+            f"+{event.x_root - dx}+{event.y_root - dy}")
+
+    def _update_record_bar_state(self):
+        if not self._pause_btn:
+            return
+        paused = bool(self.recorder and self.recorder.paused)
+        self._pause_btn.set_text("▶" if paused else "⏸")
+
+    def _tick_record_bar(self):
+        if not self._record_bar or not self.recorder:
+            return
+        canvas = self._record_bar.winfo_children()[0]
+        seconds = int(self.recorder.elapsed())
+        canvas.itemconfig(self._record_timer_text,
+                          text=f"{seconds // 60:02d}:{seconds % 60:02d}")
+        if self.recorder.paused:
+            dot_fill = COL["text_tertiary"]
+        else:
+            dot_fill = COL["error"] if seconds % 2 == 0 else COL["glass_high"]
+        canvas.itemconfig(self._record_dot, fill=dot_fill)
+        self._record_bar_job = self.root.after(500, self._tick_record_bar)
+
+    def _hide_record_bar(self):
+        if self._record_bar_job:
+            self.root.after_cancel(self._record_bar_job)
+            self._record_bar_job = None
+        if self._record_bar:
+            self._record_bar.destroy()
+            self._record_bar = None
+        self._pause_btn = None
+        self._record_dot = None
+        self._record_timer_text = None
+
     # -- actions -----------------------------------------------------------------
     def save_screenshot(self):
         if not self.screenshot:
@@ -1704,6 +2345,17 @@ class SnippyApp:
 
     @staticmethod
     def _set_clipboard_image(image):
+        """Place the image on the system clipboard, picking the mechanism
+        each OS actually supports (Windows/macOS have no shared API)."""
+        if sys.platform == "win32":
+            SnippyApp._set_clipboard_image_windows(image)
+        elif sys.platform == "darwin":
+            SnippyApp._set_clipboard_image_macos(image)
+        else:
+            SnippyApp._set_clipboard_image_linux(image)
+
+    @staticmethod
+    def _set_clipboard_image_windows(image):
         """Place the image on the Windows clipboard as a DIB."""
         buffer = io.BytesIO()
         image.convert("RGB").save(buffer, "BMP")
@@ -1730,6 +2382,49 @@ class SnippyApp:
             user32.SetClipboardData(CF_DIB, handle)
         finally:
             user32.CloseClipboard()
+
+    @staticmethod
+    def _set_clipboard_image_macos(image):
+        """Set the clipboard via osascript, which needs the PNG on disk."""
+        fd, path = tempfile.mkstemp(suffix=".png")
+        os.close(fd)
+        try:
+            image.save(path, "PNG")
+            script = (f'set the clipboard to (read (POSIX file "{path}") '
+                      f'as «class PNGf»)')
+            result = subprocess.run(["osascript", "-e", script],
+                                    capture_output=True)
+            if result.returncode != 0:
+                raise RuntimeError(result.stderr.decode(errors="replace")
+                                   or "osascript failed")
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+    @staticmethod
+    def _set_clipboard_image_linux(image):
+        """Pipe PNG bytes into whichever clipboard tool is installed."""
+        buffer = io.BytesIO()
+        image.convert("RGB").save(buffer, "PNG")
+        data = buffer.getvalue()
+
+        wayland = bool(os.environ.get("WAYLAND_DISPLAY"))
+        if wayland and shutil.which("wl-copy"):
+            args = ["wl-copy", "--type", "image/png"]
+        elif shutil.which("xclip"):
+            args = ["xclip", "-selection", "clipboard", "-t", "image/png"]
+        elif shutil.which("wl-copy"):
+            args = ["wl-copy", "--type", "image/png"]
+        else:
+            raise RuntimeError(
+                "Copying images requires 'xclip' (X11) or 'wl-clipboard' "
+                "(Wayland) to be installed.")
+        result = subprocess.run(args, input=data, capture_output=True)
+        if result.returncode != 0:
+            raise RuntimeError(
+                result.stderr.decode(errors="replace") or f"{args[0]} failed")
 
 
 def main():
