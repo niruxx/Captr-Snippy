@@ -208,6 +208,7 @@ DEFAULT_SETTINGS = {
                                    "Pictures", "Snippy"),
     "video_format": "MP4",
     "record_fps": 30,
+    "record_source": "all",   # "all" | "monitor:<index>" | "window"
 }
 
 
@@ -229,6 +230,11 @@ def load_settings():
         if isinstance(saved.get("record_fps"), int) and \
                 saved["record_fps"] in RECORD_FPS_OPTIONS:
             settings["record_fps"] = saved["record_fps"]
+        source = saved.get("record_source")
+        if source == "all" or source == "window" or (
+                isinstance(source, str) and source.startswith("monitor:")
+                and source[8:].isdigit()):
+            settings["record_source"] = source
     except (OSError, ValueError):
         pass
     return settings
@@ -299,6 +305,71 @@ def exclude_from_capture(window):
         pass
 
 
+MONITORINFOF_PRIMARY = 0x00000001
+
+
+class _MONITORINFO(ctypes.Structure):
+    _fields_ = [("cbSize", ctypes.c_ulong), ("rcMonitor", wintypes.RECT),
+                ("rcWork", wintypes.RECT), ("dwFlags", ctypes.c_ulong)]
+
+
+def list_monitors():
+    """[(left, top, right, bottom, is_primary), ...] for each connected
+    monitor, in the same virtual-desktop coordinate space ImageGrab uses."""
+    if sys.platform != "win32":
+        return []
+    monitors = []
+    MonitorEnumProc = ctypes.WINFUNCTYPE(
+        ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong,
+        ctypes.POINTER(wintypes.RECT), ctypes.c_double)
+
+    def callback(hmonitor, _hdc, _rect, _data):
+        info = _MONITORINFO()
+        info.cbSize = ctypes.sizeof(_MONITORINFO)
+        if ctypes.windll.user32.GetMonitorInfoW(hmonitor, ctypes.byref(info)):
+            r = info.rcMonitor
+            primary = bool(info.dwFlags & MONITORINFOF_PRIMARY)
+            monitors.append((r.left, r.top, r.right, r.bottom, primary))
+        return 1
+
+    try:
+        ctypes.windll.user32.EnumDisplayMonitors(
+            None, None, MonitorEnumProc(callback), 0)
+    except Exception:
+        return []
+    return monitors
+
+
+def list_windows():
+    """[(hwnd, title), ...] for visible, titled top-level windows other than
+    Snippy's own - candidates for the "record a window" source picker."""
+    if sys.platform != "win32":
+        return []
+    user32 = ctypes.windll.user32
+    windows = []
+    WNDENUMPROC = ctypes.WINFUNCTYPE(
+        ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+    def callback(hwnd, _lparam):
+        if not user32.IsWindowVisible(hwnd) or user32.IsIconic(hwnd):
+            return True
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length == 0:
+            return True
+        buf = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buf, length + 1)
+        title = buf.value
+        if title and title != "Snippy":
+            windows.append((hwnd, title))
+        return True
+
+    try:
+        user32.EnumWindows(WNDENUMPROC(callback), 0)
+    except Exception:
+        return []
+    return windows
+
+
 # ---------------------------------------------------------------------------
 # Global hotkeys - registered on a dedicated thread with its own Win32
 # message loop, since RegisterHotKey delivers WM_HOTKEY to the *thread* that
@@ -360,15 +431,18 @@ class GlobalHotkeys:
 # into a bundled ffmpeg process, which handles the mp4/mkv/flv/webm muxing.
 # ---------------------------------------------------------------------------
 class ScreenRecorder:
-    """Captures the full virtual screen to a video file. Pausing simply
-    stops feeding frames to ffmpeg, so paused time never appears in the
-    output (no frozen frames, no gap to edit out)."""
+    """Captures a configurable source (the whole desktop, one monitor, or a
+    single window - see `grab_fn`) to a video file. Pausing simply stops
+    feeding frames to ffmpeg, so paused time never appears in the output
+    (no frozen frames, no gap to edit out)."""
 
-    def __init__(self, fps, codec_args, output_path, on_error=None):
+    def __init__(self, fps, codec_args, output_path, on_error=None,
+                 grab_fn=None):
         self.fps = fps
         self.codec_args = codec_args
         self.output_path = output_path
         self.on_error = on_error
+        self.grab_fn = grab_fn or (lambda: ImageGrab.grab(all_screens=True))
         self.is_recording = False
         self.paused = False
         self.size = None
@@ -380,7 +454,9 @@ class ScreenRecorder:
         self._pause_started = None
 
     def start(self):
-        probe = ImageGrab.grab(all_screens=True)
+        probe = self.grab_fn()
+        if probe is None:
+            raise RuntimeError("Recording source is not available.")
         w, h = probe.size
         w -= w % 2  # even dimensions required by yuv420p
         h -= h % 2
@@ -406,25 +482,55 @@ class ScreenRecorder:
         self._thread.start()
 
     def _run(self):
-        w, h = self.size
         interval = 1.0 / self.fps
-        next_frame = time.perf_counter()
+        frames_written = 0
         try:
             while not self._stop_event.is_set():
                 if self.paused:
-                    time.sleep(0.05)
-                    next_frame = time.perf_counter()
+                    time.sleep(0.02)
                     continue
-                frame = ImageGrab.grab(all_screens=True)
+                # How many fps-slots of *active* (unpaused) time should
+                # already have a frame by now? If capture keeps up this is
+                # always frames_written+1; if it falls behind (a big/multi
+                # -monitor grab takes longer than 1/fps), skip straight to
+                # grabbing rather than sleeping - there's nothing to wait for.
+                target_frames = int(self.elapsed() / interval) + 1
+                if target_frames <= frames_written:
+                    time.sleep(interval / 4)
+                    continue
+                try:
+                    frame = self.grab_fn()
+                except Exception as exc:
+                    if self.on_error:
+                        self.on_error(str(exc))
+                    return
+                if frame is None:
+                    if self.on_error:
+                        self.on_error("Recording source is no longer "
+                                      "available (window closed?).")
+                    return
                 if frame.size != self.size:
-                    frame = frame.crop((0, 0, w, h))
-                self._proc.stdin.write(frame.convert("RGB").tobytes())
-                next_frame += interval
-                sleep_time = next_frame - time.perf_counter()
-                if sleep_time > 0:
-                    time.sleep(sleep_time)
-                else:
-                    next_frame = time.perf_counter()
+                    # e.g. the recorded window was resized - re-frame onto
+                    # the original canvas instead of erroring on the pipe's
+                    # fixed-size raw-frame contract.
+                    padded = Image.new("RGB", self.size, (0, 0, 0))
+                    padded.paste(frame.convert("RGB"), (0, 0))
+                    frame = padded
+                frame_bytes = frame.convert("RGB").tobytes()
+                # Duplicate this frame for every slot that elapsed while it
+                # was being captured, so the encoded timeline (frame count /
+                # fps) always tracks real active recording time. Without
+                # this, a capture that can't keep up with the requested fps
+                # (common on large/multi-monitor grabs at a high fps target)
+                # gets compressed into a much shorter, sped-up clip, since
+                # ffmpeg assumes every frame it receives is exactly 1/fps
+                # long regardless of how long it actually took to arrive.
+                target_frames = max(target_frames,
+                                    int(self.elapsed() / interval) + 1)
+                while frames_written < target_frames and \
+                        not self._stop_event.is_set():
+                    self._proc.stdin.write(frame_bytes)
+                    frames_written += 1
         except (BrokenPipeError, OSError) as exc:
             if self.on_error:
                 self.on_error(str(exc))
@@ -474,16 +580,52 @@ AA_SUPERSAMPLE = 4
 
 
 def _round_rect_image(w, h, radius, fill, border=None, border_width=1):
+    """Only the 4 corners are curved, so only they need supersampling - the
+    interior and straight edges are pixel-perfect already. Supersampling the
+    whole panel (the original approach) meant a multi-megapixel PIL resize
+    for every full-width card, which is what caused the settings-view
+    open to visibly hitch."""
     w, h = max(1, round(w)), max(1, round(h))
+    r = max(1, min(radius, h // 2, w // 2))
+    fill_rgba = hex_rgb(fill) + (255,)
+    border_rgba = hex_rgb(border or fill) + (255,)
+
     ss = AA_SUPERSAMPLE
-    r = max(1, min(radius, h // 2, w // 2)) * ss
-    image = Image.new("RGBA", (w * ss, h * ss), (0, 0, 0, 0))
+    tile = 2 * r
+    corner = Image.new("RGBA", (tile * ss, tile * ss), (0, 0, 0, 0))
+    ImageDraw.Draw(corner).rounded_rectangle(
+        [0, 0, tile * ss - 1, tile * ss - 1], radius=r * ss, fill=fill_rgba,
+        outline=border_rgba, width=max(1, border_width * ss))
+    corner = corner.resize((tile, tile), Image.Resampling.LANCZOS)
+
+    image = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
-    draw.rounded_rectangle([0, 0, w * ss - 1, h * ss - 1], radius=r,
-                           fill=hex_rgb(fill) + (255,),
-                           outline=hex_rgb(border or fill) + (255,),
-                           width=max(1, border_width * ss))
-    return image.resize((w, h), Image.Resampling.LANCZOS)
+    # A pill (r == h/2) or fully circular (r == h/2 == w/2) shape has no
+    # straight middle section on one or both axes - the corner tiles alone
+    # already cover that case, so skip a band whose extent would be <= 0.
+    if w - 2 * r > 0:
+        draw.rectangle([r, 0, w - r - 1, h - 1], fill=fill_rgba)
+    if h - 2 * r > 0:
+        draw.rectangle([0, r, w - 1, h - r - 1], fill=fill_rgba)
+    if border:
+        if w - 2 * r > 0:
+            draw.line([r, 0, w - r - 1, 0], fill=border_rgba,
+                      width=border_width)
+            draw.line([r, h - 1, w - r - 1, h - 1], fill=border_rgba,
+                      width=border_width)
+        if h - 2 * r > 0:
+            draw.line([0, r, 0, h - r - 1], fill=border_rgba,
+                      width=border_width)
+            draw.line([w - 1, r, w - 1, h - r - 1], fill=border_rgba,
+                      width=border_width)
+    image.paste(corner.crop((0, 0, r, r)), (0, 0), corner.crop((0, 0, r, r)))
+    image.paste(corner.crop((r, 0, tile, r)), (w - r, 0),
+               corner.crop((r, 0, tile, r)))
+    image.paste(corner.crop((0, r, r, tile)), (0, h - r),
+               corner.crop((0, r, r, tile)))
+    image.paste(corner.crop((r, r, tile, tile)), (w - r, h - r),
+               corner.crop((r, r, tile, tile)))
+    return image
 
 
 def _circle_image(diameter, fill, border=None, border_width=1):
@@ -1885,7 +2027,7 @@ class SnippyApp:
                  fg=COL["text_tertiary"], font=fnt_sb(9)
                  ).pack(anchor="w", padx=36, pady=(16, 8))
 
-        record_card = GlassCard(view, height=214)
+        record_card = GlassCard(view, height=316)
         record_card.pack(fill="x", padx=28)
         inner = record_card.inner
         tk.Label(inner, text="Video format", bg=COL["glass"],
@@ -1901,11 +2043,36 @@ class SnippyApp:
             inner, [str(v) for v in RECORD_FPS_OPTIONS],
             value=str(self.settings["record_fps"]),
             command=self._set_record_fps, seg_width=52)
-        self.fps_seg.pack(anchor="w", pady=(8, 8))
+        self.fps_seg.pack(anchor="w", pady=(8, 12))
+
+        tk.Label(inner, text="Record source", bg=COL["glass"],
+                 fg=COL["text"], font=fnt_sb(11)).pack(anchor="w")
+        self._monitors = list_monitors()
+        source_labels = ["Entire desktop"]
+        source_values = ["all"]
+        for i in range(len(self._monitors)):
+            source_labels.append(f"Monitor {i + 1}")
+            source_values.append(f"monitor:{i}")
+        source_labels.append("Choose window")
+        source_values.append("window")
+        self._source_value_by_label = dict(zip(source_labels, source_values))
+        self._source_label_by_value = dict(zip(source_values, source_labels))
+        current_label = self._source_label_by_value.get(
+            self.settings["record_source"], "Entire desktop")
+        self.record_source_seg = GlassSegmented(
+            inner, source_labels, value=current_label,
+            command=self._set_record_source, seg_width=112)
+        self.record_source_seg.pack(anchor="w", pady=(8, 8))
         tk.Label(inner, text="Match your display's refresh rate for the "
                             "smoothest capture (higher rates need more CPU "
-                            "and disk space) · Ctrl+Alt+R starts/stops, "
-                            "Ctrl+Alt+P pauses/resumes, from anywhere.",
+                            "and disk space). Recording a single monitor "
+                            "or window crops to a smaller, lighter output; "
+                            "“Choose window” asks which one each time you "
+                            "hit Record and follows it if it moves or "
+                            "resizes, but will show anything on top if it's "
+                            "covered by another window. Ctrl+Alt+R "
+                            "starts/stops, Ctrl+Alt+P pauses/resumes, from "
+                            "anywhere.",
                  bg=COL["glass"], fg=COL["text_secondary"], wraplength=460,
                  justify="left", font=fnt(9)).pack(anchor="w")
 
@@ -1933,6 +2100,10 @@ class SnippyApp:
 
     def _set_record_fps(self, value):
         self.settings["record_fps"] = int(value)
+        save_settings(self.settings)
+
+    def _set_record_source(self, label):
+        self.settings["record_source"] = self._source_value_by_label[label]
         save_settings(self.settings)
 
     def _choose_quick_save_dir(self):
@@ -2127,6 +2298,112 @@ class SnippyApp:
         else:
             self.start_recording()
 
+    def _make_grab_fn(self):
+        """Resolves the configured recording source into a zero-arg grab
+        callable for ScreenRecorder. Returns None if the user cancelled the
+        "choose a window" picker, meaning recording should not start."""
+        source = self.settings.get("record_source", "all")
+        if source == "window":
+            hwnd = self._pick_window()
+            if not hwnd:
+                return None
+            user32 = ctypes.windll.user32
+
+            def grab_window():
+                if not user32.IsWindow(hwnd) or user32.IsIconic(hwnd):
+                    return None
+                rect = wintypes.RECT()
+                if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+                    return None
+                if rect.right <= rect.left or rect.bottom <= rect.top:
+                    return None
+                # Cropped from a full desktop grab rather than Pillow's own
+                # window=hwnd capture: that path uses PrintWindow without
+                # PW_RENDERFULLCONTENT and comes back solid black for any
+                # GPU-accelerated window (Electron apps, browsers, games -
+                # tested and confirmed black on this exact bug). A desktop
+                # crop always shows the true composited pixels, at the cost
+                # of also showing anything else on top if it's occluded.
+                return ImageGrab.grab(
+                    all_screens=True,
+                    bbox=(rect.left, rect.top, rect.right, rect.bottom))
+            return grab_window
+        if source.startswith("monitor:"):
+            monitors = getattr(self, "_monitors", None) or []
+            try:
+                left, top, right, bottom, primary = monitors[
+                    int(source.split(":", 1)[1])]
+            except (ValueError, IndexError):
+                return lambda: ImageGrab.grab(all_screens=True)
+            if primary:
+                # the primary monitor has a fast native single-monitor grab;
+                # any other monitor still needs a full virtual-desktop grab
+                # to crop from (Windows has no fast path for just one
+                # non-primary monitor), so it stays comparatively heavy.
+                return lambda: ImageGrab.grab(all_screens=False)
+            bbox = (left, top, right, bottom)
+            return lambda: ImageGrab.grab(all_screens=True, bbox=bbox)
+        return lambda: ImageGrab.grab(all_screens=True)
+
+    def _pick_window(self):
+        """Modal picker listing open windows; returns the chosen hwnd, or
+        None if the user cancelled or nothing is available to record."""
+        windows = list_windows()
+        if not windows:
+            messagebox.showinfo("Choose window",
+                                "No open windows are available to record.")
+            return None
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Choose a window to record")
+        dialog.configure(bg=COL["bg"])
+        w, h = sc(420), sc(380)
+        x = self.root.winfo_x() + (self.root.winfo_width() - w) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
+        dialog.geometry(f"{w}x{h}+{x}+{y}")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        tk.Label(dialog, text="Choose a window to record", bg=COL["bg"],
+                 fg=COL["text"], font=fnt_sb(12)).pack(
+            anchor="w", padx=sc(16), pady=(sc(16), sc(8)))
+        listbox = tk.Listbox(dialog, font=fnt(10), activestyle="none",
+                             selectmode="browse", bg=COL["glass"],
+                             fg=COL["text"], highlightthickness=0,
+                             borderwidth=0, selectbackground=COL["accent"],
+                             selectforeground="#FFFFFF")
+        for _, title in windows:
+            listbox.insert("end", title)
+        listbox.pack(fill="both", expand=True, padx=sc(16))
+        listbox.selection_set(0)
+        listbox.focus_set()
+
+        result = {"hwnd": None}
+
+        def confirm(_event=None):
+            selection = listbox.curselection()
+            if selection:
+                result["hwnd"] = windows[selection[0]][0]
+            dialog.destroy()
+
+        def cancel(_event=None):
+            dialog.destroy()
+
+        listbox.bind("<Double-Button-1>", confirm)
+        dialog.bind("<Return>", confirm)
+        dialog.bind("<Escape>", cancel)
+        dialog.protocol("WM_DELETE_WINDOW", cancel)
+
+        btn_row = tk.Frame(dialog, bg=COL["bg"])
+        btn_row.pack(fill="x", padx=sc(16), pady=sc(16))
+        GlassButton(btn_row, "Record", command=confirm, variant="primary",
+                   width=100, height=36).pack(side="right")
+        GlassButton(btn_row, "Cancel", command=cancel, variant="glass",
+                   width=100, height=36).pack(side="right", padx=(0, 8))
+
+        dialog.wait_window()
+        return result["hwnd"]
+
     def start_recording(self):
         if self.recorder and self.recorder.is_recording:
             return
@@ -2137,13 +2414,18 @@ class SnippyApp:
             messagebox.showerror("Error", f"Cannot create folder: {exc}")
             return
 
+        grab_fn = self._make_grab_fn()
+        if grab_fn is None:
+            return  # user cancelled the window picker
+
         fmt = self.settings["video_format"]
         ext, codec_args = VIDEO_FORMATS[fmt]
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_path = os.path.join(folder, f"recording_{timestamp}{ext}")
 
         recorder = ScreenRecorder(self.settings["record_fps"], codec_args,
-                                  output_path, on_error=self._on_record_error)
+                                  output_path, on_error=self._on_record_error,
+                                  grab_fn=grab_fn)
         try:
             recorder.start()
         except Exception as exc:
@@ -2197,6 +2479,10 @@ class SnippyApp:
         bar.overrideredirect(True)
         bar.attributes("-topmost", True)
         set_window_alpha(bar, 0.96)
+        try:  # knock out the square corners around the pill, like Tooltip
+            bar.attributes("-transparentcolor", COL["bg"])
+        except tk.TclError:
+            pass
         x = (bar.winfo_screenwidth() - w) // 2
         bar.geometry(f"{w}x{h}+{x}+{sc(18)}")
         canvas = tk.Canvas(bar, width=w, height=h, bg=COL["bg"],
@@ -2229,17 +2515,30 @@ class SnippyApp:
         for widget in (bar, canvas):
             widget.bind("<Button-1>", self._record_bar_press)
             widget.bind("<B1-Motion>", self._record_bar_drag)
+        bar.update_idletasks()  # realize the HWND before excluding it
         exclude_from_capture(bar)
 
         self._record_bar = bar
         self._tick_record_bar()
 
     def _record_bar_press(self, event):
+        if sys.platform == "win32":
+            try:  # native caption drag - smoother than manual geometry(),
+                # and matches how the main window's titlebar is dragged
+                user32 = ctypes.windll.user32
+                user32.ReleaseCapture()
+                user32.PostMessageW(_root_hwnd(self._record_bar), 0x00A1, 2, 0)
+                return
+            except Exception:
+                pass
         self._record_bar_origin = (event.x_root - self._record_bar.winfo_x(),
                                    event.y_root - self._record_bar.winfo_y())
 
     def _record_bar_drag(self, event):
-        dx, dy = self._record_bar_origin
+        origin = getattr(self, "_record_bar_origin", None)
+        if not origin:
+            return  # native caption drag (Windows) handles motion itself
+        dx, dy = origin
         self._record_bar.geometry(
             f"+{event.x_root - dx}+{event.y_root - dy}")
 

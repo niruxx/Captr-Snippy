@@ -3,6 +3,7 @@
   "quality": 100,
   "auto_copy": false,
   "quick_save_dir": "C:\\Users\\niruxxdaboi\\Pictures\\Snippy",
-  "video_format": "MP4",
-  "record_fps": 144
+  "video_format": "MKV",
+  "record_fps": 240,
+  "record_source": "monitor:0"
 }
