@@ -7,5 +7,18 @@
   "record_fps": 60,
   "record_source": "monitor:0",
   "record_scale": 1.0,
-  "record_extra_ffmpeg_args": []
+  "record_extra_ffmpeg_args": [],
+  "hdr_tone_map": false,
+  "ocr_language": "eng",
+  "tesseract_cmd": "",
+  "cloud_provider": "none",
+  "cloud_imgur_client_id": "",
+  "cloud_custom_url": "",
+  "cloud_custom_field": "file",
+  "cloud_custom_auth": "",
+  "nas_enabled": false,
+  "nas_auto_save": false,
+  "nas_path": "",
+  "nas_username": "",
+  "nas_password": ""
 }

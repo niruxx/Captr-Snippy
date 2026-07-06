@@ -19,12 +19,14 @@ import tempfile
 import threading
 import time
 import tkinter as tk
+import urllib.request
+import uuid
 from ctypes import wintypes
 from tkinter import filedialog, messagebox, simpledialog
 from tkinter import font as tkfont
 from datetime import datetime
 
-from PIL import Image, ImageDraw, ImageFont, ImageGrab, ImageTk
+from PIL import Image, ImageDraw, ImageEnhance, ImageFont, ImageGrab, ImageTk
 
 import imageio_ffmpeg
 
@@ -38,6 +40,15 @@ except ImportError:
     bettercam = None
     np = None
     HAVE_BETTERCAM = False
+
+try:  # optional OCR text extraction; needs the Tesseract engine installed
+    # separately (this only wraps its CLI) - gracefully disabled if either
+    # the wrapper package or the engine binary itself is missing.
+    import pytesseract
+    HAVE_OCR = True
+except ImportError:
+    pytesseract = None
+    HAVE_OCR = False
 
 
 def blend(hex1, hex2, t):
@@ -112,6 +123,122 @@ def system_dark_mode():
         except OSError:
             pass
     return False
+
+
+# ---------------------------------------------------------------------------
+# HDR display detection - best-effort via the Windows 10 1903+ DisplayConfig
+# API. Neither GDI (ImageGrab) nor bettercam's 8-bit DXGI path ever hands
+# back real HDR pixel data (Windows always tone-maps the desktop down to an
+# SDR-referenced blend for both capture paths), so this can't recover true
+# HDR values - it's only used to know *whether* a capture was taken while a
+# display was in HDR mode, so a corrective heuristic can be applied.
+# ---------------------------------------------------------------------------
+class _LUID(ctypes.Structure):
+    _fields_ = [("LowPart", wintypes.DWORD), ("HighPart", wintypes.LONG)]
+
+
+class _DISPLAYCONFIG_RATIONAL(ctypes.Structure):
+    _fields_ = [("Numerator", wintypes.UINT), ("Denominator", wintypes.UINT)]
+
+
+class _DISPLAYCONFIG_PATH_SOURCE_INFO(ctypes.Structure):
+    _fields_ = [("adapterId", _LUID), ("id", wintypes.UINT),
+                ("modeInfoIdx", wintypes.UINT), ("statusFlags", wintypes.UINT)]
+
+
+class _DISPLAYCONFIG_PATH_TARGET_INFO(ctypes.Structure):
+    _fields_ = [("adapterId", _LUID), ("id", wintypes.UINT),
+                ("modeInfoIdx", wintypes.UINT),
+                ("outputTechnology", wintypes.UINT),
+                ("rotation", wintypes.UINT), ("scaling", wintypes.UINT),
+                ("refreshRate", _DISPLAYCONFIG_RATIONAL),
+                ("scanLineOrdering", wintypes.UINT),
+                ("targetAvailable", wintypes.BOOL),
+                ("statusFlags", wintypes.UINT)]
+
+
+class _DISPLAYCONFIG_PATH_INFO(ctypes.Structure):
+    _fields_ = [("sourceInfo", _DISPLAYCONFIG_PATH_SOURCE_INFO),
+                ("targetInfo", _DISPLAYCONFIG_PATH_TARGET_INFO),
+                ("flags", wintypes.UINT)]
+
+
+class _DISPLAYCONFIG_MODE_INFO(ctypes.Structure):
+    # The real struct is a tagged union of source/target/desktop-image mode
+    # info; contents are never read here; only its size (fixed at 64 bytes
+    # on all supported Windows versions) is used to satisfy
+    # QueryDisplayConfig's mode-array buffer requirement.
+    _fields_ = [("raw", ctypes.c_byte * 64)]
+
+
+class _DISPLAYCONFIG_DEVICE_INFO_HEADER(ctypes.Structure):
+    _fields_ = [("type", wintypes.UINT), ("size", wintypes.UINT),
+                ("adapterId", _LUID), ("id", wintypes.UINT)]
+
+
+class _DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO(ctypes.Structure):
+    _fields_ = [("header", _DISPLAYCONFIG_DEVICE_INFO_HEADER),
+                ("value", wintypes.UINT),
+                ("colorEncoding", wintypes.UINT),
+                ("bitsPerColorChannel", wintypes.UINT)]
+
+
+QDC_ONLY_ACTIVE_PATHS = 0x00000002
+DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO = 9
+
+
+def displays_hdr_status():
+    """{target_id: (advanced_color_supported, advanced_color_enabled)} for
+    each active display path. Returns {} (meaning "unknown", not "no HDR")
+    on non-Windows, pre-1903 Windows, or any API failure."""
+    if sys.platform != "win32":
+        return {}
+    try:
+        user32 = ctypes.windll.user32
+        n_paths = wintypes.UINT()
+        n_modes = wintypes.UINT()
+        if user32.GetDisplayConfigBufferSizes(
+                QDC_ONLY_ACTIVE_PATHS, ctypes.byref(n_paths),
+                ctypes.byref(n_modes)) != 0:
+            return {}
+        paths = (_DISPLAYCONFIG_PATH_INFO * n_paths.value)()
+        modes = (_DISPLAYCONFIG_MODE_INFO * n_modes.value)()
+        if user32.QueryDisplayConfig(
+                QDC_ONLY_ACTIVE_PATHS, ctypes.byref(n_paths), paths,
+                ctypes.byref(n_modes), modes, None) != 0:
+            return {}
+        result = {}
+        for path in paths[:n_paths.value]:
+            info = _DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO()
+            info.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO
+            info.header.size = ctypes.sizeof(info)
+            info.header.adapterId = path.targetInfo.adapterId
+            info.header.id = path.targetInfo.id
+            if user32.DisplayConfigGetDeviceInfo(ctypes.byref(info)) == 0:
+                supported = bool(info.value & 0x1)
+                enabled = bool(info.value & 0x2)
+                result[path.targetInfo.id] = (supported, enabled)
+        return result
+    except Exception:
+        return {}
+
+
+def any_display_hdr_enabled():
+    return any(enabled for _supported, enabled in displays_hdr_status().values())
+
+
+def apply_hdr_tone_map(image):
+    """Heuristic brightness/contrast/saturation lift for screenshots taken
+    while a display is in HDR mode. Both capture paths this app uses (GDI
+    ImageGrab and bettercam's DXGI duplication) only ever return an 8-bit
+    SDR-referenced blend of the real HDR frame, which is why HDR captures
+    look dim and desaturated next to what's actually on screen - there is
+    no real HDR pixel data available to tone-map from correctly, so this is
+    an approximation, not a physically accurate PQ/HLG conversion."""
+    corrected = ImageEnhance.Brightness(image).enhance(1.18)
+    corrected = ImageEnhance.Contrast(corrected).enhance(1.08)
+    corrected = ImageEnhance.Color(corrected).enhance(1.06)
+    return corrected
 
 
 WS_CAPTION = 0x00C00000
@@ -226,6 +353,19 @@ DEFAULT_SETTINGS = {
                                   # smaller frames capture/encode faster
     "record_extra_ffmpeg_args": [],  # extra args appended to the ffmpeg
                                      # encode command, e.g. a custom bitrate
+    "hdr_tone_map": False,
+    "ocr_language": "eng",
+    "tesseract_cmd": "",
+    "cloud_provider": "none",        # "none" | "imgur" | "custom"
+    "cloud_imgur_client_id": "",
+    "cloud_custom_url": "",
+    "cloud_custom_field": "file",
+    "cloud_custom_auth": "",
+    "nas_enabled": False,
+    "nas_auto_save": False,
+    "nas_path": "",
+    "nas_username": "",
+    "nas_password": "",
 }
 
 # fps the GUI's segmented control offers by default; settings.json may set
@@ -266,6 +406,25 @@ def load_settings():
         if isinstance(extra_args, list) and \
                 all(isinstance(a, str) for a in extra_args):
             settings["record_extra_ffmpeg_args"] = extra_args
+        if isinstance(saved.get("hdr_tone_map"), bool):
+            settings["hdr_tone_map"] = saved["hdr_tone_map"]
+        if isinstance(saved.get("ocr_language"), str) and saved["ocr_language"].strip():
+            settings["ocr_language"] = saved["ocr_language"].strip()
+        if isinstance(saved.get("tesseract_cmd"), str):
+            settings["tesseract_cmd"] = saved["tesseract_cmd"]
+        if saved.get("cloud_provider") in ("none", "imgur", "custom"):
+            settings["cloud_provider"] = saved["cloud_provider"]
+        for key in ("cloud_imgur_client_id", "cloud_custom_url",
+                    "cloud_custom_field", "cloud_custom_auth"):
+            if isinstance(saved.get(key), str):
+                settings[key] = saved[key]
+        if isinstance(saved.get("nas_enabled"), bool):
+            settings["nas_enabled"] = saved["nas_enabled"]
+        if isinstance(saved.get("nas_auto_save"), bool):
+            settings["nas_auto_save"] = saved["nas_auto_save"]
+        for key in ("nas_path", "nas_username", "nas_password"):
+            if isinstance(saved.get(key), str):
+                settings[key] = saved[key]
     except (OSError, ValueError):
         pass
     return settings
@@ -277,6 +436,95 @@ def save_settings(settings):
             json.dump(settings, fh, indent=2)
     except OSError:
         pass
+
+
+# ---------------------------------------------------------------------------
+# Cloud upload - a tiny hand-rolled multipart/form-data POST so uploading a
+# capture doesn't need to add `requests` as a hard dependency just for this.
+# ---------------------------------------------------------------------------
+def _multipart_post(url, fields, file_field, filename, file_bytes,
+                     content_type="image/png", headers=None, timeout=20):
+    boundary = f"----SnippyBoundary{uuid.uuid4().hex}"
+    parts = []
+    for name, value in (fields or {}).items():
+        parts.append(
+            f'--{boundary}\r\nContent-Disposition: form-data; '
+            f'name="{name}"\r\n\r\n{value}\r\n'.encode("utf-8"))
+    parts.append(
+        f'--{boundary}\r\nContent-Disposition: form-data; name="{file_field}"; '
+        f'filename="{filename}"\r\nContent-Type: {content_type}\r\n\r\n'
+        .encode("utf-8"))
+    parts.append(file_bytes)
+    parts.append(f"\r\n--{boundary}--\r\n".encode("utf-8"))
+    body = b"".join(parts)
+
+    req = urllib.request.Request(url, data=body, method="POST")
+    req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
+    for key, value in (headers or {}).items():
+        req.add_header(key, value)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.status, resp.read()
+
+
+def upload_to_imgur(image, client_id):
+    """Anonymous upload via Imgur's public API; returns the image's URL."""
+    buf = io.BytesIO()
+    image.convert("RGB").save(buf, "PNG")
+    _status, body = _multipart_post(
+        "https://api.imgur.com/3/image", {}, "image", "snippy.png",
+        buf.getvalue(), headers={"Authorization": f"Client-ID {client_id}"})
+    data = json.loads(body.decode("utf-8"))
+    if not data.get("success"):
+        raise RuntimeError(
+            (data.get("data") or {}).get("error", "Upload failed"))
+    return data["data"]["link"]
+
+
+def upload_to_custom(image, url, field, auth_header, fmt="PNG"):
+    """POST to a user-configured endpoint; looks for a JSON url/link field
+    in the response, falling back to the raw response body as the result
+    (many self-hosted upload endpoints and webhooks just echo the link)."""
+    buf = io.BytesIO()
+    image.convert("RGB").save(buf, fmt)
+    headers = {}
+    auth_header = (auth_header or "").strip()
+    if auth_header:
+        if ":" in auth_header:
+            key, value = auth_header.split(":", 1)
+            headers[key.strip()] = value.strip()
+        else:
+            headers["Authorization"] = auth_header
+    status, body = _multipart_post(
+        url, {}, field or "file", f"snippy.{fmt.lower()}", buf.getvalue(),
+        headers=headers)
+    text = body.decode("utf-8", errors="replace").strip()
+    try:
+        data = json.loads(text)
+        for key in ("url", "link"):
+            if isinstance(data.get(key), str):
+                return data[key]
+        nested = data.get("data")
+        if isinstance(nested, dict):
+            for key in ("url", "link"):
+                if isinstance(nested.get(key), str):
+                    return nested[key]
+    except (ValueError, AttributeError):
+        pass
+    return text or f"Uploaded (HTTP {status})"
+
+
+# ---------------------------------------------------------------------------
+# NAS / Samba - saves are just filesystem writes to a UNC path; `net use`
+# is invoked first only when credentials are configured, to establish the
+# session (a share already mounted, or accessible without auth, needs none).
+# ---------------------------------------------------------------------------
+def nas_share_root(path):
+    """`\\\\server\\share` from a longer `\\\\server\\share\\sub\\dir` path,
+    or None if `path` isn't a UNC path."""
+    parts = [p for p in path.strip("\\/").split("\\") if p]
+    if len(parts) < 2:
+        return None
+    return "\\\\" + parts[0] + "\\" + parts[1]
 
 
 def ease_out(t):
@@ -1375,6 +1623,20 @@ class TrafficLights(tk.Canvas):
         self.commands[index]()
 
 
+def themed_entry(parent, textvariable, show=None, width=None):
+    """A plain tk.Entry styled to match the glass cards (no canvas-based
+    glass widget exists for free text input)."""
+    kwargs = dict(textvariable=textvariable, bg=COL["glass_dim"],
+                 fg=COL["text"], insertbackground=COL["text"], relief="flat",
+                 highlightthickness=1, highlightbackground=COL["border"],
+                 highlightcolor=COL["accent"], font=fnt(10))
+    if show is not None:
+        kwargs["show"] = show
+    if width is not None:
+        kwargs["width"] = width
+    return tk.Entry(parent, **kwargs)
+
+
 class GlassCard(tk.Canvas):
     """Rounded pane with a hairline edge, hosting an inner frame."""
 
@@ -1415,6 +1677,8 @@ TOOLS = (
     ("rect",      "▭", "Rectangle"),
     ("ellipse",   "◯", "Ellipse"),
     ("text",      "T",      "Text"),
+    ("redact",    "▓", "Redact / pixelate"),
+    ("picker",    "🎨", "Color picker"),
     ("crop",      "⬚", "Crop"),
 )
 
@@ -1667,19 +1931,28 @@ class SnippyApp:
 
         Returns {name: (glyph, font)} so fluent and unicode glyphs can mix."""
         symbol = ("Segoe UI Symbol", 12)
+        emoji = ("Segoe UI Emoji", 12)
         families = set(tkfont.families())
+        icons = None
         for family in ("Segoe Fluent Icons", "Segoe MDL2 Assets"):
             if family in families:
                 fluent = (family, 11)
-                return {"settings":  ("\uE713", fluent),
+                icons = {"settings":  ("\uE713", fluent),
                         "copy":      ("\uE8C8", fluent),
                         "save":      ("\uE74E", fluent),
                         "back":      ("\uE72B", fluent),
                         "quicksave": ("\uE896", fluent),   # Download
                         "clear":     ("\uE74D", fluent)}   # Delete
-        return {"settings": ("⚙", symbol), "copy": ("⧉", symbol),
-                "save": ("💾", symbol), "back": ("←", symbol),
-                "quicksave": ("↓", symbol), "clear": ("×", symbol)}
+                break
+        if icons is None:
+            icons = {"settings": ("⚙", symbol), "copy": ("⧉", symbol),
+                     "save": ("💾", symbol), "back": ("←", symbol),
+                     "quicksave": ("↓", symbol), "clear": ("×", symbol)}
+        # not part of the Fluent set above (codepoints unverified) - always
+        # use plain Unicode glyphs for these, which render reliably either way
+        icons.update({"ocr": ("🔤", emoji), "cloud": ("☁", symbol),
+                      "nas": ("🖧", emoji)})
+        return icons
 
     def _bind_shortcuts(self):
         self.root.bind("<Control-n>", lambda e: self.start_region_capture())
@@ -1761,9 +2034,13 @@ class SnippyApp:
                                         value="0s", seg_width=44, height=26)
         self.delay_seg.pack(anchor="w")
 
-        # packed right-to-left: settings, quick save, save as, copy, remove
+        # packed right-to-left: settings, ocr, cloud, nas, quick save,
+        # save as, copy, remove
         for icon, tip, command in (
                 ("settings", "Settings", self.open_settings),
+                ("ocr", "Extract text (OCR)", self.extract_text),
+                ("cloud", "Upload to cloud", self.upload_to_cloud),
+                ("nas", "Save to NAS / Samba", self.save_to_nas),
                 ("quicksave", "Quick save (Ctrl+Q)", self.quick_save),
                 ("save", "Save as… (Ctrl+S)", self.save_screenshot),
                 ("copy", "Copy (Ctrl+C)", self.copy_to_clipboard),
@@ -1780,7 +2057,12 @@ class SnippyApp:
         inner = bar.inner
         self.tool_buttons = {}
         for name, glyph, tip in TOOLS:
-            font = fnt_sb(12) if name == "text" else ("Segoe UI Symbol", 12)
+            if name == "text":
+                font = fnt_sb(12)
+            elif name == "picker":
+                font = ("Segoe UI Emoji", 12)
+            else:
+                font = ("Segoe UI Symbol", 12)
             btn = GlassButton(inner, glyph,
                               command=lambda n=name: self.set_tool(n),
                               variant="plain", width=40, height=40,
@@ -1949,6 +2231,10 @@ class SnippyApp:
             c.create_rectangle(x0, y0, x1, y1, outline="",
                                fill=self.annot_color, stipple="gray25",
                                tags="tmp")
+        elif self.tool == "redact":
+            c.create_rectangle(x0, y0, x1, y1, outline=COL["error"],
+                               fill=COL["error"], stipple="gray50",
+                               tags="tmp")
         elif self.tool == "crop":
             c.create_rectangle(x0, y0, x1, y1, outline=COL["accent"],
                                dash=(5, 3), tags="tmp")
@@ -1977,6 +2263,9 @@ class SnippyApp:
         if self.tool == "text":
             self._annotate_text(p1)
             return
+        if self.tool == "picker":
+            self._pick_color_at(p1)
+            return
         if not moved and self.tool != "pen":
             return
 
@@ -2002,6 +2291,9 @@ class SnippyApp:
                                         width=eff_w)
         elif self.tool == "highlight":
             self.screenshot = self._draw_highlight(img, p0, p1)
+        elif self.tool == "redact":
+            box = self._sorted_box(p0, p1)
+            self.screenshot = self._pixelate_region(img, box)
         elif self.tool == "crop":
             box = self._sorted_box(p0, p1)
             if box[2] - box[0] < 5 or box[3] - box[1] < 5:
@@ -2037,6 +2329,43 @@ class SnippyApp:
                                           fill=hex_rgb(self.annot_color) + (80,))
         return Image.alpha_composite(base, overlay).convert("RGB")
 
+    @staticmethod
+    def _pixelate_region(img, box):
+        """Bakes a mosaic over `box` - for redacting sensitive on-screen
+        content before sharing a capture. Irreversible once committed
+        (undo restores the pre-redact image, same as any other tool)."""
+        x0, y0, x1, y1 = (round(v) for v in box)
+        x0, y0 = max(0, x0), max(0, y0)
+        x1, y1 = min(img.width, x1), min(img.height, y1)
+        if x1 - x0 < 2 or y1 - y0 < 2:
+            return img
+        region = img.crop((x0, y0, x1, y1))
+        factor = max(1, min(region.width, region.height) // 12)
+        small = region.resize(
+            (max(1, region.width // factor), max(1, region.height // factor)),
+            Image.Resampling.BILINEAR)
+        mosaic = small.resize(region.size, Image.Resampling.NEAREST)
+        img.paste(mosaic, (x0, y0))
+        return img
+
+    def _pick_color_at(self, pos):
+        """Eyedropper: samples the pixel under the click, makes it the
+        active annotation color, and copies its hex code to the clipboard."""
+        x = min(max(int(pos[0]), 0), self.screenshot.width - 1)
+        y = min(max(int(pos[1]), 0), self.screenshot.height - 1)
+        rgb = self.screenshot.convert("RGB").getpixel((x, y))
+        hex_color = "#%02X%02X%02X" % rgb
+        self.annot_color = hex_color
+        for color, dot in self.color_dots.items():
+            dot.set_selected(color == hex_color)
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(hex_color)
+        except tk.TclError:
+            pass
+        self._set_status(f"Picked {hex_color} · copied to clipboard")
+        self.show_toast(f"Color {hex_color} copied to clipboard")
+
     def _annotate_text(self, pos):
         text = simpledialog.askstring("Add text", "Annotation text:",
                                       parent=self.root)
@@ -2071,6 +2400,11 @@ class SnippyApp:
         self._render_history()
 
     def _add_capture(self, image):
+        if self.settings.get("hdr_tone_map") and any_display_hdr_enabled():
+            try:
+                image = apply_hdr_tone_map(image)
+            except Exception:
+                pass
         self.history.insert(0, image)
         del self.history[HISTORY_LIMIT:]
         self.history_index = 0
@@ -2141,9 +2475,9 @@ class SnippyApp:
 
     # -- settings view --------------------------------------------------------
     def _build_settings_view(self):
-        view = self.settings_view
+        outer = self.settings_view
 
-        top = tk.Frame(view, bg=COL["bg"])
+        top = tk.Frame(outer, bg=COL["bg"])
         top.pack(fill="x", padx=28, pady=(22, 12))
         glyph, font = self.icons["back"]
         back = GlassButton(top, glyph, command=self.close_settings,
@@ -2153,6 +2487,36 @@ class SnippyApp:
         Tooltip(back, "Back")
         tk.Label(top, text="Settings", bg=COL["bg"], fg=COL["text"],
                  font=fnt_sb(20)).pack(side="left", padx=12)
+
+        # Everything below scrolls - there are now more setting sections
+        # than reliably fit one screen at the window's minimum size.
+        scroll_area = tk.Frame(outer, bg=COL["bg"])
+        scroll_area.pack(fill="both", expand=True)
+        canvas = tk.Canvas(scroll_area, bg=COL["bg"], highlightthickness=0)
+        scrollbar = tk.Scrollbar(scroll_area, orient="vertical",
+                                 command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        view = tk.Frame(canvas, bg=COL["bg"])
+        window = canvas.create_window((0, 0), window=view, anchor="nw")
+
+        def _sync_scrollregion(_event=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def _sync_width(event):
+            canvas.itemconfig(window, width=event.width)
+
+        view.bind("<Configure>", _sync_scrollregion)
+        canvas.bind("<Configure>", _sync_width)
+
+        def _on_mousewheel(event):
+            canvas.yview_scroll(-1 * int(event.delta / 120), "units")
+
+        canvas.bind("<Enter>",
+                   lambda e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
 
         tk.Label(view, text="EXPORT", bg=COL["bg"], fg=COL["text_tertiary"],
                  font=fnt_sb(9)).pack(anchor="w", padx=36, pady=(12, 8))
@@ -2273,6 +2637,220 @@ class SnippyApp:
                  bg=COL["glass"], fg=COL["text_secondary"], wraplength=460,
                  justify="left", font=fnt(9)).pack(anchor="w")
 
+        tk.Label(view, text="HDR CAPTURE", bg=COL["bg"],
+                 fg=COL["text_tertiary"], font=fnt_sb(9)
+                 ).pack(anchor="w", padx=36, pady=(16, 8))
+
+        hdr_card = GlassCard(view, height=170)
+        hdr_card.pack(fill="x", padx=28)
+        inner = hdr_card.inner
+        header = tk.Frame(inner, bg=COL["glass"])
+        header.pack(fill="x")
+        tk.Label(header, text="Correct washed-out HDR captures",
+                 bg=COL["glass"], fg=COL["text"], font=fnt_sb(11)
+                 ).pack(side="left")
+        GlassSwitch(header, value=self.settings["hdr_tone_map"],
+                    command=self._set_hdr_tone_map).pack(side="right")
+        tk.Label(inner, text="Screenshots of HDR content can look dim or "
+                             "washed out, because capture APIs only ever "
+                             "see the SDR-referenced blend Windows "
+                             "composites, not the brightness boost the "
+                             "display itself applies. When on, new "
+                             "captures taken while a display is in HDR "
+                             "mode get a brightness/contrast lift to "
+                             "compensate (a heuristic, not a physically "
+                             "accurate tone-map).",
+                 bg=COL["glass"], fg=COL["text_secondary"], font=fnt(9),
+                 wraplength=460, justify="left").pack(anchor="w",
+                                                      pady=(8, 8))
+        self.hdr_status_var = tk.StringVar(value=self._hdr_status_text())
+        tk.Label(inner, textvariable=self.hdr_status_var, bg=COL["glass"],
+                 fg=COL["text_tertiary"], font=fnt(9), justify="left"
+                 ).pack(anchor="w")
+
+        tk.Label(view, text="TEXT EXTRACTION (OCR)", bg=COL["bg"],
+                 fg=COL["text_tertiary"], font=fnt_sb(9)
+                 ).pack(anchor="w", padx=36, pady=(16, 8))
+
+        ocr_card = GlassCard(view, height=190)
+        ocr_card.pack(fill="x", padx=28)
+        inner = ocr_card.inner
+        tk.Label(inner, text="Tesseract language code", bg=COL["glass"],
+                 fg=COL["text"], font=fnt_sb(11)).pack(anchor="w")
+        self.ocr_lang_var = tk.StringVar(value=self.settings["ocr_language"])
+        entry = themed_entry(inner, self.ocr_lang_var, width=12)
+        entry.pack(anchor="w", pady=(8, 10))
+        entry.bind("<FocusOut>",
+                  lambda e: self._set_ocr_language(self.ocr_lang_var.get()))
+        entry.bind("<Return>",
+                  lambda e: self._set_ocr_language(self.ocr_lang_var.get()))
+
+        tk.Label(inner, text="Tesseract install path (optional - only "
+                             "needed if it's not on your PATH)",
+                 bg=COL["glass"], fg=COL["text"], font=fnt_sb(11)
+                 ).pack(anchor="w")
+        self.tesseract_cmd_var = tk.StringVar(
+            value=self.settings["tesseract_cmd"])
+        entry = themed_entry(inner, self.tesseract_cmd_var)
+        entry.pack(fill="x", pady=(8, 8))
+        entry.bind("<FocusOut>",
+                  lambda e: self._set_tesseract_cmd(self.tesseract_cmd_var.get()))
+        entry.bind("<Return>",
+                  lambda e: self._set_tesseract_cmd(self.tesseract_cmd_var.get()))
+        ocr_status = ("pytesseract is installed." if HAVE_OCR else
+                     "Install with 'pip install pytesseract', plus the "
+                     "Tesseract OCR engine itself.")
+        tk.Label(inner, text=ocr_status, bg=COL["glass"],
+                 fg=COL["text_secondary"], font=fnt(9), wraplength=460,
+                 justify="left").pack(anchor="w")
+
+        tk.Label(view, text="CLOUD UPLOAD", bg=COL["bg"],
+                 fg=COL["text_tertiary"], font=fnt_sb(9)
+                 ).pack(anchor="w", padx=36, pady=(16, 8))
+
+        cloud_card = GlassCard(view, height=300)
+        cloud_card.pack(fill="x", padx=28)
+        inner = cloud_card.inner
+        tk.Label(inner, text="Provider", bg=COL["glass"], fg=COL["text"],
+                 font=fnt_sb(11)).pack(anchor="w")
+        self.cloud_seg = GlassSegmented(
+            inner, ["None", "Imgur", "Custom"],
+            value=self._cloud_provider_label(),
+            command=self._set_cloud_provider, seg_width=90)
+        self.cloud_seg.pack(anchor="w", pady=(8, 12))
+
+        tk.Label(inner, text="Imgur Client ID", bg=COL["glass"],
+                 fg=COL["text"], font=fnt_sb(11)).pack(anchor="w")
+        self.imgur_var = tk.StringVar(
+            value=self.settings["cloud_imgur_client_id"])
+        entry = themed_entry(inner, self.imgur_var)
+        entry.pack(fill="x", pady=(8, 10))
+        entry.bind("<FocusOut>", lambda e: self._set_cloud_field(
+            "cloud_imgur_client_id", self.imgur_var.get()))
+        entry.bind("<Return>", lambda e: self._set_cloud_field(
+            "cloud_imgur_client_id", self.imgur_var.get()))
+
+        tk.Label(inner, text="Custom upload URL", bg=COL["glass"],
+                 fg=COL["text"], font=fnt_sb(11)).pack(anchor="w")
+        self.cloud_url_var = tk.StringVar(
+            value=self.settings["cloud_custom_url"])
+        entry = themed_entry(inner, self.cloud_url_var)
+        entry.pack(fill="x", pady=(8, 10))
+        entry.bind("<FocusOut>", lambda e: self._set_cloud_field(
+            "cloud_custom_url", self.cloud_url_var.get()))
+        entry.bind("<Return>", lambda e: self._set_cloud_field(
+            "cloud_custom_url", self.cloud_url_var.get()))
+
+        row2 = tk.Frame(inner, bg=COL["glass"])
+        row2.pack(fill="x")
+        left = tk.Frame(row2, bg=COL["glass"])
+        left.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        tk.Label(left, text="Form field name", bg=COL["glass"],
+                 fg=COL["text"], font=fnt_sb(11)).pack(anchor="w")
+        self.cloud_field_var = tk.StringVar(
+            value=self.settings["cloud_custom_field"])
+        entry = themed_entry(left, self.cloud_field_var, width=14)
+        entry.pack(anchor="w", pady=(8, 0))
+        entry.bind("<FocusOut>", lambda e: self._set_cloud_field(
+            "cloud_custom_field", self.cloud_field_var.get()))
+        entry.bind("<Return>", lambda e: self._set_cloud_field(
+            "cloud_custom_field", self.cloud_field_var.get()))
+
+        right = tk.Frame(row2, bg=COL["glass"])
+        right.pack(side="left", fill="x", expand=True, padx=(6, 0))
+        tk.Label(right, text="Auth header (Name: value)", bg=COL["glass"],
+                 fg=COL["text"], font=fnt_sb(11)).pack(anchor="w")
+        self.cloud_auth_var = tk.StringVar(
+            value=self.settings["cloud_custom_auth"])
+        entry = themed_entry(right, self.cloud_auth_var)
+        entry.pack(fill="x", pady=(8, 0))
+        entry.bind("<FocusOut>", lambda e: self._set_cloud_field(
+            "cloud_custom_auth", self.cloud_auth_var.get()))
+        entry.bind("<Return>", lambda e: self._set_cloud_field(
+            "cloud_custom_auth", self.cloud_auth_var.get()))
+
+        tk.Label(inner, text="Imgur uploads anonymously with just a Client "
+                             "ID (register a free app at api.imgur.com). "
+                             "Custom posts the image as multipart/form-data "
+                             "and looks for a JSON \"url\"/\"link\" field in "
+                             "the response, falling back to the raw "
+                             "response body.",
+                 bg=COL["glass"], fg=COL["text_secondary"], font=fnt(9),
+                 wraplength=460, justify="left").pack(anchor="w",
+                                                      pady=(10, 0))
+
+        tk.Label(view, text="NAS / SAMBA", bg=COL["bg"],
+                 fg=COL["text_tertiary"], font=fnt_sb(9)
+                 ).pack(anchor="w", padx=36, pady=(16, 8))
+
+        nas_card = GlassCard(view, height=300)
+        nas_card.pack(fill="x", padx=28)
+        inner = nas_card.inner
+        header = tk.Frame(inner, bg=COL["glass"])
+        header.pack(fill="x")
+        tk.Label(header, text="Enable NAS / Samba destination",
+                 bg=COL["glass"], fg=COL["text"], font=fnt_sb(11)
+                 ).pack(side="left")
+        GlassSwitch(header, value=self.settings["nas_enabled"],
+                    command=self._set_nas_enabled).pack(side="right")
+
+        tk.Label(inner, text=r"Network path (e.g. \\NAS\Share\Snippy or "
+                             "smb://nas/share/Snippy)",
+                 bg=COL["glass"], fg=COL["text"], font=fnt_sb(11)
+                 ).pack(anchor="w", pady=(10, 0))
+        self.nas_path_var = tk.StringVar(value=self.settings["nas_path"])
+        entry = themed_entry(inner, self.nas_path_var)
+        entry.pack(fill="x", pady=(8, 10))
+        entry.bind("<FocusOut>", lambda e: self._set_nas_field(
+            "nas_path", self.nas_path_var.get()))
+        entry.bind("<Return>", lambda e: self._set_nas_field(
+            "nas_path", self.nas_path_var.get()))
+
+        row3 = tk.Frame(inner, bg=COL["glass"])
+        row3.pack(fill="x")
+        left = tk.Frame(row3, bg=COL["glass"])
+        left.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        tk.Label(left, text="Username (optional)", bg=COL["glass"],
+                 fg=COL["text"], font=fnt_sb(11)).pack(anchor="w")
+        self.nas_user_var = tk.StringVar(value=self.settings["nas_username"])
+        entry = themed_entry(left, self.nas_user_var)
+        entry.pack(fill="x", pady=(8, 0))
+        entry.bind("<FocusOut>", lambda e: self._set_nas_field(
+            "nas_username", self.nas_user_var.get()))
+        entry.bind("<Return>", lambda e: self._set_nas_field(
+            "nas_username", self.nas_user_var.get()))
+
+        right = tk.Frame(row3, bg=COL["glass"])
+        right.pack(side="left", fill="x", expand=True, padx=(6, 0))
+        tk.Label(right, text="Password (optional)", bg=COL["glass"],
+                 fg=COL["text"], font=fnt_sb(11)).pack(anchor="w")
+        self.nas_pass_var = tk.StringVar(value=self.settings["nas_password"])
+        entry = themed_entry(right, self.nas_pass_var, show="•")
+        entry.pack(fill="x", pady=(8, 0))
+        entry.bind("<FocusOut>", lambda e: self._set_nas_field(
+            "nas_password", self.nas_pass_var.get()))
+        entry.bind("<Return>", lambda e: self._set_nas_field(
+            "nas_password", self.nas_pass_var.get()))
+
+        footer = tk.Frame(inner, bg=COL["glass"])
+        footer.pack(fill="x", pady=(12, 0))
+        tk.Label(footer, text="Copy every save here too", bg=COL["glass"],
+                 fg=COL["text"], font=fnt_sb(10)).pack(side="left")
+        GlassSwitch(footer, value=self.settings["nas_auto_save"],
+                    command=self._set_nas_auto_save).pack(side="right")
+        GlassButton(footer, "Test connection", command=self._test_nas_connection,
+                   variant="glass", width=130, height=32,
+                   font=fnt_sb(9)).pack(side="right", padx=(0, 10))
+
+        tk.Label(inner, text="Credentials are stored in settings.json in "
+                             "plain text on this machine, the same as "
+                             "every other Snippy setting. Leave username/"
+                             "password blank to use a share you've already "
+                             "connected to.",
+                 bg=COL["glass"], fg=COL["text_secondary"], font=fnt(9),
+                 wraplength=460, justify="left").pack(anchor="w",
+                                                      pady=(10, 0))
+
         tk.Label(view, text="Settings are saved automatically · "
                             "theme follows the Windows light/dark setting.",
                  bg=COL["bg"], fg=COL["text_tertiary"],
@@ -2310,6 +2888,61 @@ class SnippyApp:
             self.settings["quick_save_dir"] = chosen
             self.dir_var.set(chosen)
             save_settings(self.settings)
+
+    # -- HDR -----------------------------------------------------------------
+    def _set_hdr_tone_map(self, value):
+        self.settings["hdr_tone_map"] = value
+        save_settings(self.settings)
+
+    @staticmethod
+    def _hdr_status_text():
+        status = displays_hdr_status()
+        if not status:
+            return "HDR status: unknown on this system/Windows version."
+        on = sum(1 for _supported, enabled in status.values() if enabled)
+        if on:
+            return f"HDR status: {on} of {len(status)} display(s) " \
+                   "currently in HDR mode."
+        return f"HDR status: all {len(status)} display(s) are in SDR mode."
+
+    # -- OCR -------------------------------------------------------------------
+    def _set_ocr_language(self, value):
+        self.settings["ocr_language"] = value.strip() or "eng"
+        save_settings(self.settings)
+
+    def _set_tesseract_cmd(self, value):
+        self.settings["tesseract_cmd"] = value.strip()
+        save_settings(self.settings)
+
+    # -- cloud upload -----------------------------------------------------------
+    _CLOUD_LABELS = {"none": "None", "imgur": "Imgur", "custom": "Custom"}
+    _CLOUD_VALUES = {v: k for k, v in _CLOUD_LABELS.items()}
+
+    def _cloud_provider_label(self):
+        return self._CLOUD_LABELS.get(
+            self.settings.get("cloud_provider", "none"), "None")
+
+    def _set_cloud_provider(self, label):
+        self.settings["cloud_provider"] = self._CLOUD_VALUES.get(
+            label, "none")
+        save_settings(self.settings)
+
+    def _set_cloud_field(self, key, value):
+        self.settings[key] = value.strip()
+        save_settings(self.settings)
+
+    # -- NAS / Samba -------------------------------------------------------------
+    def _set_nas_enabled(self, value):
+        self.settings["nas_enabled"] = value
+        save_settings(self.settings)
+
+    def _set_nas_auto_save(self, value):
+        self.settings["nas_auto_save"] = value
+        save_settings(self.settings)
+
+    def _set_nas_field(self, key, value):
+        self.settings[key] = value if key == "nas_password" else value.strip()
+        save_settings(self.settings)
 
     # -- toast -------------------------------------------------------------
     def show_toast(self, message):
@@ -2815,26 +3448,263 @@ class SnippyApp:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self._save_to(os.path.join(folder, f"snippet_{timestamp}{ext}"))
 
-    def _save_to(self, file_path):
+    def _write_image(self, image, file_path):
+        """Saves `image` to `file_path`, picking the PIL format from the
+        extension (falling back to the configured export format for an
+        unrecognized one). Shared by local save and the NAS destination."""
         fmt = self.settings["export_format"]
         ext_map = {".png": "PNG", ".jpg": "JPEG", ".jpeg": "JPEG",
                    ".webp": "WEBP", ".bmp": "BMP"}
         actual_fmt = ext_map.get(os.path.splitext(file_path)[1].lower(), fmt)
+        img = image
+        if actual_fmt in ("JPEG", "BMP") and img.mode != "RGB":
+            img = img.convert("RGB")
+        kwargs = {}
+        if actual_fmt in LOSSY_FORMATS:
+            kwargs["quality"] = self.settings["quality"]
+        img.save(file_path, actual_fmt, **kwargs)
+        return actual_fmt
 
+    def _save_to(self, file_path):
         try:
-            img = self.screenshot
-            if actual_fmt in ("JPEG", "BMP") and img.mode != "RGB":
-                img = img.convert("RGB")
-            kwargs = {}
-            if actual_fmt in LOSSY_FORMATS:
-                kwargs["quality"] = self.settings["quality"]
-            img.save(file_path, actual_fmt, **kwargs)
+            actual_fmt = self._write_image(self.screenshot, file_path)
             self._set_status(f"Saved to {os.path.basename(file_path)}")
             self.show_toast(f"Saved as {actual_fmt} · "
                             f"{os.path.basename(file_path)}")
         except Exception as exc:
             messagebox.showerror("Error", f"Failed to save: {exc}")
             self._set_status("Save failed")
+            return
+        if self.settings.get("nas_enabled") and self.settings.get("nas_auto_save"):
+            self.save_to_nas(silent=True)
+
+    # -- OCR text extraction -------------------------------------------------
+    def extract_text(self):
+        if not self.screenshot:
+            self.show_toast("Capture a screenshot first")
+            return
+        if not HAVE_OCR:
+            messagebox.showinfo(
+                "OCR unavailable",
+                "Text extraction needs the 'pytesseract' package plus the "
+                "Tesseract OCR engine itself.\n\n"
+                "pip install pytesseract\n"
+                "https://github.com/tesseract-ocr/tesseract\n\n"
+                "If Tesseract isn't on your PATH, point Settings → Text "
+                "Extraction at its install folder.")
+            return
+        cmd = self.settings.get("tesseract_cmd", "").strip()
+        if cmd:
+            pytesseract.pytesseract.tesseract_cmd = cmd
+        elif sys.platform == "win32":
+            for candidate in (r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+                              r"C:\Program Files (x86)\Tesseract-OCR"
+                              r"\tesseract.exe"):
+                if os.path.exists(candidate):
+                    pytesseract.pytesseract.tesseract_cmd = candidate
+                    break
+        self._set_status("Extracting text…")
+        image = self.screenshot.copy()
+        lang = self.settings.get("ocr_language", "eng")
+
+        def work():
+            try:
+                text = pytesseract.image_to_string(image, lang=lang).strip()
+            except Exception as exc:
+                self.root.after(0, lambda: self._ocr_failed(str(exc)))
+                return
+            self.root.after(0, lambda: self._ocr_done(text))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _ocr_failed(self, message):
+        self._set_status("OCR failed")
+        messagebox.showerror("OCR failed", f"Text extraction failed:\n{message}")
+
+    def _ocr_done(self, text):
+        if not text:
+            self._set_status("No text found")
+            self.show_toast("No text detected in this capture")
+            return
+        self._set_status(f"Extracted {len(text)} characters of text")
+        self._show_ocr_dialog(text)
+
+    def _show_ocr_dialog(self, text):
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Extracted text")
+        dialog.configure(bg=COL["bg"])
+        w, h = sc(480), sc(420)
+        x = self.root.winfo_x() + (self.root.winfo_width() - w) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
+        dialog.geometry(f"{w}x{h}+{x}+{y}")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        tk.Label(dialog, text="Extracted text", bg=COL["bg"], fg=COL["text"],
+                 font=fnt_sb(12)).pack(anchor="w", padx=sc(16),
+                                       pady=(sc(16), sc(8)))
+        body = tk.Frame(dialog, bg=COL["bg"])
+        body.pack(fill="both", expand=True, padx=sc(16))
+        scrollbar = tk.Scrollbar(body)
+        scrollbar.pack(side="right", fill="y")
+        text_widget = tk.Text(body, wrap="word", font=fnt(10),
+                              bg=COL["glass_dim"], fg=COL["text"],
+                              insertbackground=COL["text"], relief="flat",
+                              yscrollcommand=scrollbar.set)
+        text_widget.insert("1.0", text)
+        text_widget.pack(fill="both", expand=True)
+        scrollbar.config(command=text_widget.yview)
+
+        def copy_all():
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text_widget.get("1.0", "end-1c"))
+            self.show_toast("Text copied to clipboard")
+
+        btn_row = tk.Frame(dialog, bg=COL["bg"])
+        btn_row.pack(fill="x", padx=sc(16), pady=sc(16))
+        GlassButton(btn_row, "Close", command=dialog.destroy, variant="glass",
+                   width=100, height=36).pack(side="right")
+        GlassButton(btn_row, "Copy all", command=copy_all, variant="primary",
+                   width=110, height=36).pack(side="right", padx=(0, 8))
+        dialog.bind("<Escape>", lambda e: dialog.destroy())
+
+    # -- cloud upload ---------------------------------------------------------
+    def upload_to_cloud(self):
+        if not self.screenshot:
+            self.show_toast("Capture a screenshot first")
+            return
+        provider = self.settings.get("cloud_provider", "none")
+        if provider == "none":
+            messagebox.showinfo(
+                "Cloud upload",
+                "Choose a cloud upload provider in Settings → Cloud Upload "
+                "first.")
+            return
+        self._set_status("Uploading…")
+        image = self.screenshot.copy()
+
+        def work():
+            try:
+                if provider == "imgur":
+                    client_id = self.settings.get(
+                        "cloud_imgur_client_id", "").strip()
+                    if not client_id:
+                        raise RuntimeError(
+                            "Set an Imgur Client ID in Settings first.")
+                    link = upload_to_imgur(image, client_id)
+                else:
+                    url = self.settings.get("cloud_custom_url", "").strip()
+                    if not url:
+                        raise RuntimeError(
+                            "Set a custom upload URL in Settings first.")
+                    link = upload_to_custom(
+                        image, url, self.settings.get("cloud_custom_field",
+                                                       "file"),
+                        self.settings.get("cloud_custom_auth", ""))
+            except Exception as exc:
+                self.root.after(0, lambda: self._upload_failed(str(exc)))
+                return
+            self.root.after(0, lambda: self._upload_done(link))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _upload_failed(self, message):
+        self._set_status("Upload failed")
+        messagebox.showerror("Upload failed", message)
+
+    def _upload_done(self, link):
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(link)
+        except tk.TclError:
+            pass
+        self._set_status("Uploaded · link copied to clipboard")
+        self.show_toast("Uploaded · link copied to clipboard")
+
+    # -- NAS / Samba -----------------------------------------------------------
+    def _connect_nas(self):
+        """Establishes the share session (if credentials are configured)
+        and returns the writable folder path."""
+        path = self.settings.get("nas_path", "").strip()
+        if not path:
+            raise RuntimeError("No NAS/Samba path configured in Settings.")
+        if sys.platform == "win32":
+            user = self.settings.get("nas_username", "").strip()
+            if user:
+                share_root = nas_share_root(path)
+                if not share_root:
+                    raise RuntimeError(
+                        r"NAS path must be a UNC path, e.g. "
+                        r"\\SERVER\Share\Folder")
+                result = subprocess.run(
+                    ["net", "use", share_root,
+                     self.settings.get("nas_password", ""), f"/user:{user}"],
+                    capture_output=True, text=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW)
+                combined = (result.stdout + result.stderr).lower()
+                if result.returncode != 0 and "already" not in combined \
+                        and "multiple connections" not in combined:
+                    raise RuntimeError(
+                        result.stderr.strip() or result.stdout.strip()
+                        or "net use failed")
+        os.makedirs(path, exist_ok=True)
+        return path
+
+    def save_to_nas(self, silent=False):
+        if not self.screenshot:
+            if not silent:
+                self.show_toast("Capture a screenshot first")
+            return
+        if not self.settings.get("nas_enabled") or \
+                not self.settings.get("nas_path", "").strip():
+            if not silent:
+                messagebox.showinfo(
+                    "NAS / Samba",
+                    "Turn on and configure a NAS/Samba path in Settings "
+                    "first.")
+            return
+        if not silent:
+            self._set_status("Connecting to NAS…")
+        image = self.screenshot
+        ext = FORMATS[self.settings["export_format"]]
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        def work():
+            try:
+                folder = self._connect_nas()
+                path = os.path.join(folder, f"snippet_{timestamp}{ext}")
+                self._write_image(image, path)
+            except Exception as exc:
+                self.root.after(0, lambda: self._nas_failed(str(exc), silent))
+                return
+            self.root.after(0, lambda: self._nas_done(path, silent))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _nas_failed(self, message, silent):
+        self._set_status("NAS save failed")
+        if not silent:
+            messagebox.showerror("NAS / Samba", f"Failed to save to NAS:\n"
+                                                f"{message}")
+
+    def _nas_done(self, path, silent):
+        self._set_status(f"Saved to NAS · {os.path.basename(path)}")
+        if not silent:
+            self.show_toast(f"Saved to NAS · {os.path.basename(path)}")
+
+    def _test_nas_connection(self):
+        self._set_status("Testing NAS connection…")
+
+        def work():
+            try:
+                self._connect_nas()
+            except Exception as exc:
+                message = str(exc)
+                self.root.after(0, lambda: messagebox.showerror(
+                    "NAS / Samba", message))
+                self.root.after(0, lambda: self._set_status(
+                    "NAS connection failed"))
+                return
+            self.root.after(0, lambda: self.show_toast("NAS connection OK"))
+            self.root.after(0, lambda: self._set_status("NAS connection OK"))
+        threading.Thread(target=work, daemon=True).start()
 
     def copy_to_clipboard(self):
         if not self.screenshot:
