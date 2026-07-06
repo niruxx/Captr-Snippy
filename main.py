@@ -28,6 +28,17 @@ from PIL import Image, ImageDraw, ImageFont, ImageGrab, ImageTk
 
 import imageio_ffmpeg
 
+try:  # optional GPU-accelerated capture (Windows only); recording falls
+    # back to plain ImageGrab everywhere else, or if this fails to load
+    # (older GPU/driver, virtual display, Remote Desktop, non-Windows OS).
+    import bettercam
+    import numpy as np
+    HAVE_BETTERCAM = sys.platform == "win32"
+except ImportError:
+    bettercam = None
+    np = None
+    HAVE_BETTERCAM = False
+
 
 def blend(hex1, hex2, t):
     """Linear blend between two hex colors, t in [0, 1]."""
@@ -209,7 +220,18 @@ DEFAULT_SETTINGS = {
     "video_format": "MP4",
     "record_fps": 30,
     "record_source": "all",   # "all" | "monitor:<index>" | "window"
+    # JSON-only power-user knobs - not exposed in the GUI, but honored if
+    # set by hand in settings.json:
+    "record_scale": 1.0,          # downscale captured frames (0.1-1.0);
+                                  # smaller frames capture/encode faster
+    "record_extra_ffmpeg_args": [],  # extra args appended to the ffmpeg
+                                     # encode command, e.g. a custom bitrate
 }
+
+# fps the GUI's segmented control offers by default; settings.json may set
+# record_fps to any other positive value and it'll still be honored (the
+# control just grows an extra pill for it so the display stays accurate)
+RECORD_FPS_RANGE = (1, 1000)
 
 
 def load_settings():
@@ -227,14 +249,23 @@ def load_settings():
             settings["quick_save_dir"] = saved["quick_save_dir"]
         if saved.get("video_format") in VIDEO_FORMATS:
             settings["video_format"] = saved["video_format"]
-        if isinstance(saved.get("record_fps"), int) and \
-                saved["record_fps"] in RECORD_FPS_OPTIONS:
-            settings["record_fps"] = saved["record_fps"]
+        record_fps = saved.get("record_fps")
+        if isinstance(record_fps, int) and not isinstance(record_fps, bool) \
+                and RECORD_FPS_RANGE[0] <= record_fps <= RECORD_FPS_RANGE[1]:
+            settings["record_fps"] = record_fps
         source = saved.get("record_source")
         if source == "all" or source == "window" or (
                 isinstance(source, str) and source.startswith("monitor:")
                 and source[8:].isdigit()):
             settings["record_source"] = source
+        scale = saved.get("record_scale")
+        if isinstance(scale, (int, float)) and not isinstance(scale, bool) \
+                and 0.1 <= scale <= 1.0:
+            settings["record_scale"] = float(scale)
+        extra_args = saved.get("record_extra_ffmpeg_args")
+        if isinstance(extra_args, list) and \
+                all(isinstance(a, str) for a in extra_args):
+            settings["record_extra_ffmpeg_args"] = extra_args
     except (OSError, ValueError):
         pass
     return settings
@@ -427,6 +458,154 @@ class GlobalHotkeys:
 
 
 # ---------------------------------------------------------------------------
+# Desktop capture - GPU-accelerated (DXGI Desktop Duplication, via
+# bettercam) when available, since plain BitBlt (what ImageGrab uses) is
+# often too slow to sustain a smooth frame rate on a large or multi-monitor
+# desktop. Falls back to ImageGrab transparently: on non-Windows platforms,
+# when bettercam isn't installed, or if DXGI duplication itself fails (older
+# GPU/driver, virtual display, Remote Desktop all commonly reject it).
+# ---------------------------------------------------------------------------
+class DesktopGrabber:
+    """Grabs the whole virtual desktop (optionally cropped to `bbox`, in the
+    same coordinate space `list_monitors()` reports) as fast as possible."""
+
+    def __init__(self):
+        self._monitors = list_monitors() if HAVE_BETTERCAM else []
+        self._cams = []
+        self._last_frames = {}
+        self._canvas = None  # reused across frames - see _grab_gpu()
+        self.using_gpu = False
+        if self._monitors:
+            lefts = [m[0] for m in self._monitors]
+            tops = [m[1] for m in self._monitors]
+            rights = [m[2] for m in self._monitors]
+            bottoms = [m[3] for m in self._monitors]
+            self._origin = (min(lefts), min(tops))
+            self._size = (max(rights) - min(lefts), max(bottoms) - min(tops))
+            self._try_start_gpu()
+        else:
+            self._origin = (0, 0)
+            self._size = (0, 0)
+
+    def _try_start_gpu(self):
+        try:
+            cams = [bettercam.create(output_idx=i, output_color="RGB")
+                    for i in range(len(self._monitors))]
+            # smoke-test the whole pipeline now (surfaces a missing codec
+            # DLL, an unsupported adapter, or a Remote Desktop session
+            # immediately, rather than partway through a recording)
+            for cam in cams:
+                for _ in range(50):
+                    if cam.grab() is not None:
+                        break
+                    time.sleep(0.01)
+            self._cams = cams
+            self.using_gpu = True
+        except Exception:
+            self._stop_gpu()
+
+    def _stop_gpu(self):
+        for cam in self._cams:
+            try:
+                cam.release()
+            except Exception:
+                pass
+        self._cams = []
+        self.using_gpu = False
+
+    def grab(self, bbox=None):
+        """Returns a PIL Image for the requested region. When GPU capture
+        is active the image may share memory with an internal buffer that
+        the *next* grab() call overwrites in place - callers must finish
+        with one frame (e.g. `.convert("RGB").tobytes()`, which copies)
+        before requesting the next."""
+        if self.using_gpu:
+            try:
+                image = self._grab_gpu(bbox)
+                if image is not None:
+                    return image
+            except Exception:
+                self._stop_gpu()
+        image = ImageGrab.grab(all_screens=True)
+        if bbox is not None:
+            ox, oy = self._origin if self._monitors else \
+                self._virtual_origin()
+            image = image.crop((bbox[0] - ox, bbox[1] - oy,
+                                bbox[2] - ox, bbox[3] - oy))
+        return image
+
+    def _monitor_index_for_bbox(self, bbox):
+        """Index of the one monitor bbox lies fully within, else None."""
+        left, top, right, bottom = bbox
+        for i, (ml, mt, mr, mb, _primary) in enumerate(self._monitors):
+            if left >= ml and top >= mt and right <= mr and bottom <= mb:
+                return i
+        return None
+
+    def _grab_monitor(self, index):
+        frame = self._cams[index].grab()
+        if frame is not None:
+            self._last_frames[index] = frame
+        return self._last_frames.get(index)
+
+    def _grab_gpu(self, bbox):
+        # The common case (recording just one monitor, or a window that
+        # lives on one monitor) only needs that camera's own frame, sliced
+        # directly - compositing the whole virtual desktop for it would
+        # waste a full-size buffer allocation and copy on every frame.
+        if bbox is not None:
+            index = self._monitor_index_for_bbox(bbox)
+            if index is not None:
+                frame = self._grab_monitor(index)
+                if frame is None:
+                    return None
+                ml, mt, _, _, _ = self._monitors[index]
+                left, top, right, bottom = bbox
+                x0, y0 = left - ml, top - mt
+                x1, y1 = right - ml, bottom - mt
+                return Image.fromarray(
+                    np.ascontiguousarray(frame[y0:y1, x0:x1]))
+
+        w, h = self._size
+        if self._canvas is None:
+            # Allocated once and overwritten in place on every subsequent
+            # call - a fresh np.zeros() per frame meant a 4K+ desktop was
+            # re-allocating and re-zeroing tens of MB every single frame.
+            # Any gap no monitor covers just stays black forever either way.
+            self._canvas = np.zeros((h, w, 3), dtype=np.uint8)
+        canvas = self._canvas
+        ox, oy = self._origin
+        for i, (left, top, _right, _bottom, _primary) in \
+                enumerate(self._monitors):
+            frame = self._grab_monitor(i)
+            if frame is None:
+                continue
+            x0, y0 = left - ox, top - oy
+            fh = min(frame.shape[0], h - y0)
+            fw = min(frame.shape[1], w - x0)
+            canvas[y0:y0 + fh, x0:x0 + fw] = frame[:fh, :fw]
+        image = Image.fromarray(canvas)
+        if bbox is not None:  # bbox spanning multiple monitors (rare)
+            ox, oy = self._origin
+            image = image.crop((bbox[0] - ox, bbox[1] - oy,
+                                bbox[2] - ox, bbox[3] - oy))
+        return image
+
+    @staticmethod
+    def _virtual_origin():
+        if sys.platform != "win32":
+            return (0, 0)
+        try:
+            user32 = ctypes.windll.user32
+            return (user32.GetSystemMetrics(76), user32.GetSystemMetrics(77))
+        except Exception:
+            return (0, 0)
+
+    def close(self):
+        self._stop_gpu()
+
+
+# ---------------------------------------------------------------------------
 # Screen recording - frames are grabbed on a background thread and piped
 # into a bundled ffmpeg process, which handles the mp4/mkv/flv/webm muxing.
 # ---------------------------------------------------------------------------
@@ -437,12 +616,13 @@ class ScreenRecorder:
     (no frozen frames, no gap to edit out)."""
 
     def __init__(self, fps, codec_args, output_path, on_error=None,
-                 grab_fn=None):
+                 grab_fn=None, scale=1.0):
         self.fps = fps
         self.codec_args = codec_args
         self.output_path = output_path
         self.on_error = on_error
         self.grab_fn = grab_fn or (lambda: ImageGrab.grab(all_screens=True))
+        self.scale = scale if scale and 0 < scale < 1.0 else 1.0
         self.is_recording = False
         self.paused = False
         self.size = None
@@ -458,6 +638,8 @@ class ScreenRecorder:
         if probe is None:
             raise RuntimeError("Recording source is not available.")
         w, h = probe.size
+        if self.scale != 1.0:
+            w, h = max(2, round(w * self.scale)), max(2, round(h * self.scale))
         w -= w % 2  # even dimensions required by yuv420p
         h -= h % 2
         self.size = (w, h)
@@ -509,7 +691,13 @@ class ScreenRecorder:
                         self.on_error("Recording source is no longer "
                                       "available (window closed?).")
                     return
-                if frame.size != self.size:
+                if self.scale != 1.0:
+                    # record_scale downsamples every frame to a fixed
+                    # target size regardless of small native-size wobble,
+                    # so this also absorbs a resized recorded window for
+                    # free.
+                    frame = frame.resize(self.size, Image.Resampling.BILINEAR)
+                elif frame.size != self.size:
                     # e.g. the recorded window was resized - re-frame onto
                     # the original canvas instead of erroring on the pipe's
                     # fixed-size raw-frame contract.
@@ -1286,6 +1474,7 @@ class SnippyApp:
 
         # screen-recording state
         self.recorder = None
+        self._desktop_grabber = None
         self._record_bar = None
         self._record_bar_job = None
         self._pause_btn = None
@@ -1357,6 +1546,9 @@ class SnippyApp:
         if self.recorder:
             self.recorder.stop()
             self.recorder = None
+        if self._desktop_grabber:
+            self._desktop_grabber.close()
+            self._desktop_grabber = None
         if getattr(self, "hotkeys", None):
             self.hotkeys.stop()
         self.root.destroy()
@@ -2039,8 +2231,13 @@ class SnippyApp:
 
         tk.Label(inner, text="Frame rate", bg=COL["glass"],
                  fg=COL["text"], font=fnt_sb(11)).pack(anchor="w")
+        # settings.json may set a custom record_fps outside this list (e.g.
+        # to match an odd monitor refresh rate) - show it too rather than
+        # have the control silently not match the active setting.
+        fps_choices = sorted(set(RECORD_FPS_OPTIONS) |
+                             {self.settings["record_fps"]})
         self.fps_seg = GlassSegmented(
-            inner, [str(v) for v in RECORD_FPS_OPTIONS],
+            inner, [str(v) for v in fps_choices],
             value=str(self.settings["record_fps"]),
             command=self._set_record_fps, seg_width=52)
         self.fps_seg.pack(anchor="w", pady=(8, 12))
@@ -2300,12 +2497,20 @@ class SnippyApp:
 
     def _make_grab_fn(self):
         """Resolves the configured recording source into a zero-arg grab
-        callable for ScreenRecorder. Returns None if the user cancelled the
-        "choose a window" picker, meaning recording should not start."""
+        callable for ScreenRecorder, all backed by one shared DesktopGrabber
+        (GPU-accelerated when available) so monitor/window crops get the
+        same speed-up as recording the whole desktop. Returns None if the
+        user cancelled the "choose a window" picker, meaning recording
+        should not start."""
+        grabber = DesktopGrabber()
+        self._desktop_grabber = grabber
         source = self.settings.get("record_source", "all")
+
         if source == "window":
             hwnd = self._pick_window()
             if not hwnd:
+                grabber.close()
+                self._desktop_grabber = None
                 return None
             user32 = ctypes.windll.user32
 
@@ -2324,26 +2529,21 @@ class SnippyApp:
                 # tested and confirmed black on this exact bug). A desktop
                 # crop always shows the true composited pixels, at the cost
                 # of also showing anything else on top if it's occluded.
-                return ImageGrab.grab(
-                    all_screens=True,
+                return grabber.grab(
                     bbox=(rect.left, rect.top, rect.right, rect.bottom))
             return grab_window
+
         if source.startswith("monitor:"):
             monitors = getattr(self, "_monitors", None) or []
             try:
-                left, top, right, bottom, primary = monitors[
+                left, top, right, bottom, _primary = monitors[
                     int(source.split(":", 1)[1])]
             except (ValueError, IndexError):
-                return lambda: ImageGrab.grab(all_screens=True)
-            if primary:
-                # the primary monitor has a fast native single-monitor grab;
-                # any other monitor still needs a full virtual-desktop grab
-                # to crop from (Windows has no fast path for just one
-                # non-primary monitor), so it stays comparatively heavy.
-                return lambda: ImageGrab.grab(all_screens=False)
+                return lambda: grabber.grab()
             bbox = (left, top, right, bottom)
-            return lambda: ImageGrab.grab(all_screens=True, bbox=bbox)
-        return lambda: ImageGrab.grab(all_screens=True)
+            return lambda: grabber.grab(bbox=bbox)
+
+        return lambda: grabber.grab()
 
     def _pick_window(self):
         """Modal picker listing open windows; returns the chosen hwnd, or
@@ -2420,12 +2620,15 @@ class SnippyApp:
 
         fmt = self.settings["video_format"]
         ext, codec_args = VIDEO_FORMATS[fmt]
+        codec_args = codec_args + self.settings.get(
+            "record_extra_ffmpeg_args", [])
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_path = os.path.join(folder, f"recording_{timestamp}{ext}")
 
         recorder = ScreenRecorder(self.settings["record_fps"], codec_args,
                                   output_path, on_error=self._on_record_error,
-                                  grab_fn=grab_fn)
+                                  grab_fn=grab_fn,
+                                  scale=self.settings.get("record_scale", 1.0))
         try:
             recorder.start()
         except Exception as exc:
@@ -2442,6 +2645,9 @@ class SnippyApp:
         recorder = self.recorder
         self.recorder = None
         path = recorder.stop()
+        if self._desktop_grabber:
+            self._desktop_grabber.close()
+            self._desktop_grabber = None
         self._hide_record_bar()
         self.root.deiconify()
         if discard:
