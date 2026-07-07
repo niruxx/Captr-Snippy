@@ -2,6 +2,10 @@
 
 A Python/tkinter screenshot and screen-recording tool with a translucent "glass" UI. Capture a region or the full screen, annotate it, keep a history of recent captures, and record your desktop, a single monitor, or one window to video — all from one lightweight app with no cloud account or install-heavy dependencies.
 
+It's meant as a fast, always-available alternative to the Windows Snipping Tool or a paid capture app: something you can launch in a second to grab a region, mark it up, and drop it into a bug report, a chat message, or a how-to doc, or to record a quick screen-capture walkthrough — without signing into anything or paying for a subscription.
+
+![Snippy's main window - translucent glass UI over the desktop, with the capture toolbar, annotation bar, and history rail](screenshots/01-main-window.png)
+
 ## Features
 
 ### Capture
@@ -76,8 +80,14 @@ python main.py
 
 1. Pick a delay (**0s** / **3s** / **10s**) next to the capture buttons if you need a moment to set up what you're capturing
 2. Click **＋ Snip region** (or `Ctrl+N` / `PrintScreen`) to drag-select an area, or **Full screen** (`Ctrl+F`) to grab everything at once
+
+   ![Region-select overlay - dimmed screen with a crosshair drag selection and a live width × height readout](screenshots/02-region-select.png)
+
 3. The capture appears in the preview and is added to the history rail at the bottom
 4. **Annotate** it with the toolbar: pick a tool, then a color and stroke width, and draw directly on the preview; `Ctrl+Z` undoes the last edit
+
+   ![Annotated capture with rectangle, arrow, highlight, and pen tools applied, plus the capture history rail showing earlier snips](screenshots/03-annotate-toolbar.png)
+
 5. **Save As** (`Ctrl+S`) to choose a location and format, or **Quick save** (`Ctrl+Q`) to save straight into your configured folder
 6. **Copy** (`Ctrl+C`) to put it on the clipboard, or turn on **Copy after capture** in Settings to do that automatically every time
 7. **Remove capture** (`Delete`) to drop the current one from history; click any thumbnail in the rail to switch back to an earlier capture
@@ -96,6 +106,9 @@ python main.py
    - **Frame rate**: a preset from 15-240 fps (match your display's refresh rate for the smoothest capture)
 2. Click **⏺ Record** (or press `Ctrl+Alt+R`) to start
 3. Snippy's window hides and a small floating control bar appears with a timer, pause/resume, and stop buttons — drag it anywhere, it won't show up in the recording
+
+   ![Floating recording control bar with a red record indicator, elapsed timer, and pause/stop buttons](screenshots/07-recording-control-bar.png)
+
 4. Use the bar's pause button, or `Ctrl+Alt+P`, to pause and resume — paused time is not included in the output
 5. Click stop, or `Ctrl+Alt+R` again, to finish; the recording is saved into your Quick save folder
 
@@ -117,6 +130,14 @@ python main.py
 ## Configuration (`settings.json`)
 
 Every setting in the Settings screen is persisted to `settings.json` next to `main.py`, and the file can be hand-edited too — Snippy validates each key independently on load, so an edit it doesn't understand for one key still keeps the rest intact. A few knobs are **only** available by editing the file directly (no GUI control, to keep Settings uncluttered):
+
+The Settings screen is one scrollable page, grouped by section:
+
+![Settings - Export and General sections: image format, quality slider, copy-after-capture toggle, quick save folder](screenshots/04-settings-export-general.png)
+
+![Settings - Screen Recording and HDR Capture sections: video format, frame rate, record source, and the HDR tone-map toggle](screenshots/05-settings-recording-hdr.png)
+
+![Settings - Text Extraction, Cloud Upload, and NAS / Samba sections](screenshots/06-settings-ocr-cloud-nas.png)
 
 | Key | GUI control? | Values / notes |
 | --- | --- | --- |
