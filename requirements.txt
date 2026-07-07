@@ -1,4 +1,4 @@
-Pillow==10.0.0
+Pillow==12.2.0
 pyperclip==1.8.2
 imageio-ffmpeg==0.5.1
 
