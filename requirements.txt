@@ -1,5 +1,5 @@
 Pillow==12.2.0
-pyperclip==1.8.2
+PySide6>=6.6
 imageio-ffmpeg==0.5.1
 
 # Optional GPU-accelerated screen recording (Windows only). Recording still
@@ -8,10 +8,3 @@ imageio-ffmpeg==0.5.1
 # e.g. over Remote Desktop or on some virtual displays).
 bettercam==1.0.0; sys_platform == "win32"
 opencv-python-headless>=4.8; sys_platform == "win32"
-
-# Optional OCR text extraction. This is just a thin wrapper around the
-# Tesseract OCR engine, which is a separate install (not on PyPI):
-# https://github.com/tesseract-ocr/tesseract#installing-tesseract
-# The "Extract text" button in the app degrades to a friendly message
-# pointing here if either piece is missing.
-pytesseract==0.3.13
