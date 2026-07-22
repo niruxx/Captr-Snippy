@@ -15,12 +15,16 @@ import math
 from PIL import Image, ImageDraw
 from PIL.ImageQt import ImageQt
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QCursor, QFont, QGuiApplication, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import QInputDialog, QWidget
+from PySide6.QtGui import (QColor, QCursor, QFont, QGuiApplication, QPainter,
+                           QPainterPath, QPen, QPixmap)
+from PySide6.QtWidgets import (QGraphicsDropShadowEffect, QInputDialog,
+                               QWidget)
 
 from ..annotation import (draw_arrow, draw_highlight, load_annotation_font,
                           pixelate_region, sorted_box)
-from ..theme import get_palette
+from ..theme import GLASS, get_palette, qcolor
+
+PANEL_RADIUS = 22
 
 MOVE_THRESHOLD = 3
 
@@ -43,6 +47,12 @@ class PreviewCanvas(QWidget):
         self._pen_points = []
         self.setMouseTracking(True)
         self.setMinimumSize(200, 200)
+
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(32)
+        shadow.setOffset(0, 10)
+        shadow.setColor(QColor(0, 0, 0, 50))
+        self.setGraphicsEffect(shadow)
 
     def set_palette(self, col):
         self._col = col
@@ -103,10 +113,13 @@ class PreviewCanvas(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         col = self._col
-        painter.fillRect(self.rect(), QColor(col["surface"]))
-        pen = QPen(QColor(col["border"]))
+        panel = QPainterPath()
+        panel.addRoundedRect(QRectF(0.5, 0.5, self.width() - 1, self.height() - 1),
+                             PANEL_RADIUS, PANEL_RADIUS)
+        painter.fillPath(panel, qcolor(col["tint"], GLASS))
+        pen = QPen(QColor(col["highlight_edge"]))
         painter.setPen(pen)
-        painter.drawRect(QRectF(0.5, 0.5, self.width() - 1, self.height() - 1))
+        painter.drawPath(panel)
 
         if self._pixmap is None:
             painter.setPen(QColor(col["text_secondary"]))
@@ -117,8 +130,11 @@ class PreviewCanvas(QWidget):
                              "No capture yet · press Ctrl+N to snip")
             return
 
+        painter.save()
+        painter.setClipPath(panel)
         ox, oy = self._offset
         painter.drawPixmap(int(ox), int(oy), self._pixmap)
+        painter.restore()
 
         if self._drag_start and self._drag_end:
             self._paint_live_preview(painter)

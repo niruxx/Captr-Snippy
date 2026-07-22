@@ -15,7 +15,7 @@ from ..theme import blend, get_palette
 class ToggleSwitch(QWidget):
     toggled = Signal(bool)
 
-    def __init__(self, value=False, parent=None, width=44, height=26):
+    def __init__(self, value=False, parent=None, width=40, height=24):
         super().__init__(parent)
         self.value = bool(value)
         self._pos = 1.0 if self.value else 0.0
@@ -50,12 +50,14 @@ class ToggleSwitch(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
         r = h / 2
-        track = blend(col["border_soft"], col["accent"], self._pos)
+        track = blend(col["border_soft"], col["toggle_on"], self._pos)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(track))
         painter.drawRoundedRect(QRectF(0, 0, w, h), r, r)
 
         kr = r - 3
         kx = r + self._pos * (w - 2 * r)
+        painter.setBrush(QColor(0, 0, 0, 45))
+        painter.drawEllipse(QRectF(kx - kr, h / 2 - kr + 1, 2 * kr, 2 * kr))
         painter.setBrush(QColor("#FFFFFF"))
         painter.drawEllipse(QRectF(kx - kr, h / 2 - kr, 2 * kr, 2 * kr))

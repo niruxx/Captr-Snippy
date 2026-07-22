@@ -11,10 +11,11 @@ import sys
 from datetime import datetime
 
 from PIL import ImageGrab
-from PySide6.QtCore import QPoint, Qt, QTimer
-from PySide6.QtGui import QKeySequence, QShortcut
-from PySide6.QtWidgets import (QFileDialog, QMessageBox, QSizeGrip,
-                               QStackedLayout, QVBoxLayout, QWidget)
+from PySide6.QtCore import QRectF, Qt, QTimer
+from PySide6.QtGui import (QColor, QKeySequence, QLinearGradient, QPainter,
+                           QPainterPath, QShortcut)
+from PySide6.QtWidgets import (QApplication, QFileDialog, QMessageBox,
+                               QSizeGrip, QVBoxLayout, QWidget)
 
 from .anim import animate
 from .capture import DesktopGrabber, list_monitors, list_windows
@@ -22,6 +23,7 @@ from .clipboard import copy_image_to_clipboard
 from .hotkeys import (MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, GlobalHotkeys)
 from .models import CaptureState
 from .recording import ScreenRecorder
+from .rounded_mask import rounded_region
 from .settings import (FORMATS, LOSSY_FORMATS, PAUSE_HOTKEY_VK,
                        RECORD_HOTKEY_VK, VIDEO_FORMATS, load_settings,
                        save_settings)
@@ -32,17 +34,21 @@ from .views.main_view import TOOLS, MainView
 from .views.settings_view import SettingsView
 from .views.window_picker import WindowPickerDialog
 from .widgets.record_bar import RecordControlBar
+from .widgets.slide_stack import SlideStack
 from .widgets.titlebar import CustomTitleBar
 from .widgets.toast import Toast
 
-WINDOW_SIZE = (1100, 800)
-MIN_SIZE = (960, 700)
+WINDOW_SIZE = (960, 700)
+MIN_SIZE = (820, 600)
+WINDOW_RADIUS = 10
+FADE_MS = 200
 
 
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__(None, Qt.WindowType.FramelessWindowHint)
         self.setWindowTitle("Snippy")
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
         self.settings = load_settings()
         self.capture_state = CaptureState()
@@ -55,7 +61,7 @@ class MainWindow(QWidget):
         self._record_tick_timer = None
         self._monitors = []
         self.overlay = None
-        self._slide_anims = []
+        self._closing = False
 
         self._build_ui()
         self._apply_theme(self.dark, initial=True)
@@ -82,6 +88,7 @@ class MainWindow(QWidget):
             x = y = 100
         self.setGeometry(x, y, width, height)
         self.setMinimumSize(*MIN_SIZE)
+        self._update_mask()
 
     # -- UI construction ---------------------------------------------------------
     def _build_ui(self):
@@ -92,27 +99,56 @@ class MainWindow(QWidget):
         self.titlebar = CustomTitleBar(self)
         root.addWidget(self.titlebar)
 
-        self.stack_container = QWidget()
-        self.stack_layout = QStackedLayout(self.stack_container)
-        self.stack_layout.setStackingMode(QStackedLayout.StackingMode.StackAll)
+        self.stack_container = SlideStack()
         root.addWidget(self.stack_container, 1)
 
         self.main_view = MainView(self.capture_state)
         self.settings_view = SettingsView(self.settings)
-        self.stack_layout.addWidget(self.settings_view)
-        self.stack_layout.addWidget(self.main_view)
-        self.stack_layout.setCurrentWidget(self.main_view)
-        self.settings_view.hide()
+        self.stack_container.add_view(self.main_view)
+        self.stack_container.add_view(self.settings_view)
 
         self.toast = Toast(self)
 
         grip = QSizeGrip(self)
-        grip.setFixedSize(16, 16)
+        grip.setFixedSize(14, 14)
         self._size_grip = grip
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._size_grip.move(self.width() - 18, self.height() - 18)
+        self._update_mask()
+
+    def _update_mask(self):
+        """Clips the whole window (including children) to rounded corners,
+        not just the background paint - otherwise child widgets near a
+        corner would poke past the rounded gradient with square edges.
+        Uses an anti-aliased corner mask (see rounded_mask.py) rather than
+        a raw QRegion polygon, which rasterizes curves with no
+        antialiasing and looks visibly pixelated at this radius."""
+        if self.isMaximized():
+            self.clearMask()
+            return
+        self.setMask(rounded_region(self.width(), self.height(), WINDOW_RADIUS))
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == event.Type.WindowStateChange:
+            self._update_mask()
+
+    def paintEvent(self, event):
+        """Paints the whole window's backdrop: a soft gradient, clipped to
+        rounded corners when floating (square when maximized/snapped, since
+        rounded corners against the screen edge look broken)."""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        col = get_palette(self.dark)
+        gradient = QLinearGradient(0, 0, 0, self.height())
+        gradient.setColorAt(0, QColor(col["bg_top"]))
+        gradient.setColorAt(1, QColor(col["bg_bottom"]))
+        radius = 0 if self.isMaximized() else WINDOW_RADIUS
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(self.rect()), radius, radius)
+        painter.fillPath(path, gradient)
 
     def _bind_shortcuts(self):
         bindings = (
@@ -159,6 +195,7 @@ class MainWindow(QWidget):
         mv.set_active_color(self.capture_state.annot_color)
         mv.set_active_width(self.capture_state.annot_width)
         mv.history_rail.refresh(self.capture_state)
+        mv.update_capture_presence(bool(self.capture_state.screenshot))
 
     # -- theme ---------------------------------------------------------------
     def _apply_theme(self, dark, initial=False):
@@ -173,28 +210,10 @@ class MainWindow(QWidget):
 
     # -- view transitions ------------------------------------------------------
     def open_settings(self):
-        self.settings_view.show()
-        self.settings_view.raise_()
-        self._slide(self.settings_view, self.main_view, direction=1)
+        self.stack_container.slide_to(self.settings_view, direction=1)
 
     def close_settings(self):
-        self.main_view.show()
-        self.main_view.raise_()
-        self._slide(self.main_view, self.settings_view, direction=-1)
-
-    def _slide(self, incoming, outgoing, direction):
-        for anim in self._slide_anims:
-            anim.stop()
-        self._slide_anims.clear()
-        w = self.stack_container.width()
-        incoming.move(direction * w, 0)
-        incoming.show()
-        incoming.raise_()
-
-        a1 = animate(incoming, b"pos", QPoint(direction * w, 0), QPoint(0, 0), duration=220)
-        a2 = animate(outgoing, b"pos", QPoint(0, 0), QPoint(-direction * w, 0),
-                    duration=220, on_finished=lambda: outgoing.hide())
-        self._slide_anims = [a1, a2]
+        self.stack_container.slide_to(self.main_view, direction=-1)
 
     # -- capture ---------------------------------------------------------------
     def _delay_ms(self):
@@ -267,6 +286,7 @@ class MainWindow(QWidget):
         self.capture_state.add_capture(image, settings=self.settings)
         self.main_view.preview.refresh()
         self.main_view.history_rail.refresh(self.capture_state)
+        self.main_view.update_capture_presence(True)
         if self.settings["auto_copy"]:
             try:
                 copy_image_to_clipboard(image)
@@ -281,7 +301,7 @@ class MainWindow(QWidget):
         self.main_view.set_active_tool(tool)
         self.main_view.preview.set_tool(tool)
         if tool:
-            tip = dict((n, t) for n, _, t in TOOLS)[tool]
+            tip = dict(TOOLS)[tool]
             self.main_view.set_status(
                 f"{tip} · drag on the preview" if tool != "text"
                 else "Text · click on the preview")
@@ -313,6 +333,7 @@ class MainWindow(QWidget):
             return
         self.main_view.preview.refresh()
         self.main_view.history_rail.refresh(self.capture_state)
+        self.main_view.update_capture_presence(True)
         self.main_view.set_status(
             f"Viewing capture {index + 1} of {len(self.capture_state.history)}")
 
@@ -322,6 +343,7 @@ class MainWindow(QWidget):
         self.capture_state.remove_current()
         self.main_view.preview.refresh()
         self.main_view.history_rail.refresh(self.capture_state)
+        self.main_view.update_capture_presence(bool(self.capture_state.screenshot))
         self.main_view.set_status("Capture removed")
 
     # -- save / export / clipboard -----------------------------------------------
@@ -540,6 +562,17 @@ class MainWindow(QWidget):
 
     # -- lifecycle ---------------------------------------------------------------
     def closeEvent(self, event):
+        if self._closing:
+            super().closeEvent(event)
+            # quitOnLastWindowClosed is disabled (see app.py) since this
+            # window gets legitimately hidden - not closed - while recording,
+            # and the floating RecordControlBar (a Qt::Tool window) doesn't
+            # count towards that check anyway - so closing the real window
+            # must explicitly end the app itself.
+            QApplication.instance().quit()
+            return
+        self._closing = True
+        event.ignore()
         if self.recorder:
             self.recorder.stop()
             self.recorder = None
@@ -548,4 +581,5 @@ class MainWindow(QWidget):
             self.desktop_grabber = None
         if getattr(self, "hotkeys", None):
             self.hotkeys.stop()
-        super().closeEvent(event)
+        animate(self, b"windowOpacity", self.windowOpacity(), 0.0,
+                duration=FADE_MS, on_finished=self.close)

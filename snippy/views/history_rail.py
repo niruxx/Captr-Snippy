@@ -10,7 +10,7 @@ from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
 
-THUMB_W, THUMB_H = 112, 70
+THUMB_W, THUMB_H = 96, 60
 
 
 class HistoryRail(QWidget):

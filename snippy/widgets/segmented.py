@@ -9,7 +9,7 @@ from PySide6.QtGui import QColor, QPainter, QPainterPath
 from PySide6.QtWidgets import QWidget
 
 from ..anim import animate
-from ..theme import get_palette
+from ..theme import GLASS_STRONG, get_palette, qcolor
 
 
 class SegmentedControl(QWidget):
@@ -17,7 +17,7 @@ class SegmentedControl(QWidget):
 
     PAD = 3
 
-    def __init__(self, options, value=None, seg_width=86, height=32, parent=None):
+    def __init__(self, options, value=None, seg_width=72, height=28, parent=None):
         super().__init__(parent)
         self.options = list(options)
         self.value = value if value in self.options else (self.options[0] if self.options else None)
@@ -76,13 +76,18 @@ class SegmentedControl(QWidget):
 
         track = QPainterPath()
         track.addRoundedRect(QRectF(0.5, 0.5, w - 1, h - 1), h / 2, h / 2)
-        painter.fillPath(track, QColor(col["border_soft"]))
+        painter.fillPath(track, qcolor(col["tint"], 0.28))
+        pen = painter.pen()
+        pen.setColor(QColor(col["highlight_edge"]))
+        pen.setWidthF(1)
+        painter.setPen(pen)
+        painter.drawPath(track)
 
         thumb_h = h - 2 * self.PAD
         thumb = QPainterPath()
         thumb.addRoundedRect(QRectF(self._thumb_x, self.PAD, self.seg_width, thumb_h),
                              thumb_h / 2, thumb_h / 2)
-        painter.fillPath(thumb, QColor(col["surface_raised"]))
+        painter.fillPath(thumb, qcolor(col["tint"], GLASS_STRONG))
         pen = painter.pen()
         pen.setColor(QColor(col["border"]))
         pen.setWidthF(1)

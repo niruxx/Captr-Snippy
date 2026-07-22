@@ -1,34 +1,20 @@
-"""MainView - replaces _build_main_view(). Header (title, capture actions,
-delay, icon actions), annotation toolbar, status row, history rail, and
-the preview canvas. Owns no app state itself beyond the shared
-CaptureState/settings references it's given; all actions are exposed as
-Qt signals for MainWindow to wire up.
+"""MainView - the minimal capture page. Header has just the capture
+actions (Snip/Full screen/Record), the delay control, Settings, and a
+single "..." overflow menu for less-central actions (Save As, Quick Save,
+Copy, Remove capture) - the annotation toolbar lives in the floating
+ContextualToolbar (see widgets/float_toolbar.py + preview_area.py) and only
+appears once there's something to edit.
 """
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QVBoxLayout,
-                               QWidget)
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QMenu, QVBoxLayout, QWidget
 
-from ..settings import ANNOT_COLORS, ANNOT_WIDTHS
 from ..widgets.buttons import ModernButton
-from ..widgets.card import Card
-from ..widgets.color_dot import ColorSwatch, WidthSwatch
-from ..widgets.segmented import SegmentedControl
 from .history_rail import HistoryRail
-from .preview_canvas import PreviewCanvas
+from .preview_area import PreviewArea
 
-TOOLS = (
-    ("pen",       "✎", "Pen"),
-    ("highlight", "▨", "Highlighter"),
-    ("line",      "╱", "Line"),
-    ("arrow",     "↗", "Arrow"),
-    ("rect",      "▭", "Rectangle"),
-    ("ellipse",   "◯", "Ellipse"),
-    ("text",      "T", "Text"),
-    ("redact",    "▓", "Redact / pixelate"),
-    ("picker",    "🎨", "Color picker"),
-    ("crop",      "⬚", "Crop"),
-)
+# Re-exported for main_window.py's tool-name -> tooltip lookup.
+from ..widgets.float_toolbar import TOOLS  # noqa: F401
 
 
 class MainView(QWidget):
@@ -49,19 +35,15 @@ class MainView(QWidget):
     def __init__(self, capture_state, parent=None):
         super().__init__(parent)
         self.state = capture_state
-        self.tool_buttons = {}
-        self.color_swatches = {}
-        self.width_swatches = {}
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(28, 20, 28, 12)
+        root.setContentsMargins(20, 14, 20, 12)
         root.setSpacing(10)
 
         root.addLayout(self._build_header())
-        root.addWidget(self._build_toolbar())
 
-        self.preview = PreviewCanvas(capture_state)
-        root.addWidget(self.preview, 1)
+        self.preview_area = PreviewArea(capture_state)
+        root.addWidget(self.preview_area, 1)
 
         self.history_rail = HistoryRail()
         root.addWidget(self.history_rail)
@@ -73,113 +55,103 @@ class MainView(QWidget):
         status_row.addWidget(QLabel("Ctrl+N region · Ctrl+F full screen · Ctrl+Z undo"))
         root.addLayout(status_row)
 
+        # wire the floating annotation toolbar's signals straight through
+        toolbar = self.preview_area.toolbar
+        toolbar.toolSelected.connect(self.toolSelected.emit)
+        toolbar.colorSelected.connect(self.colorSelected.emit)
+        toolbar.widthSelected.connect(self.widthSelected.emit)
+        toolbar.undoRequested.connect(self.undoRequested.emit)
+
     def _build_header(self):
         header = QHBoxLayout()
+        header.setSpacing(8)
         titles = QVBoxLayout()
+        titles.setSpacing(0)
         title = QLabel("Snippy")
-        title.setStyleSheet("font-size: 18pt; font-weight: 600;")
-        subtitle = QLabel("Screenshot studio")
-        subtitle.setStyleSheet("color: palette(mid);")
+        title.setStyleSheet("font-size: 16pt; font-weight: 700;")
         titles.addWidget(title)
-        titles.addWidget(subtitle)
         header.addLayout(titles)
-        header.addSpacing(20)
+        header.addSpacing(14)
 
-        snip_btn = ModernButton("＋  Snip region", command=self.snipRequested.emit,
-                                variant="primary", width=160, height=40)
+        snip_btn = ModernButton("  Snip region", command=self.snipRequested.emit,
+                                variant="primary", width=144, height=36,
+                                icon_name="plus", icon_size=14)
         header.addWidget(snip_btn)
         full_btn = ModernButton("Full screen", command=self.fullscreenRequested.emit,
-                                variant="glass", width=120, height=40)
+                                variant="glass", width=104, height=36,
+                                icon_name="fullscreen", icon_size=13)
         header.addWidget(full_btn)
-        record_btn = ModernButton("⏺  Record", command=self.recordToggleRequested.emit,
-                                  variant="glass", width=120, height=40)
+        record_btn = ModernButton("  Record", command=self.recordToggleRequested.emit,
+                                  variant="glass", width=110, height=36,
+                                  icon_name="record", icon_size=12,
+                                  icon_color_role="error")
         record_btn.setToolTip("Start screen recording (Ctrl+Alt+R)")
         header.addWidget(record_btn)
         self.record_btn = record_btn
 
-        header.addSpacing(12)
-        delay_box = QVBoxLayout()
-        delay_label = QLabel("Delay")
-        delay_label.setStyleSheet("color: palette(mid); font-size: 8pt;")
-        delay_box.addWidget(delay_label)
-        self.delay_seg = SegmentedControl(["0s", "3s", "10s"], value="0s",
-                                          seg_width=44, height=26)
-        self.delay_seg.valueChanged.connect(self.delayChanged.emit)
-        delay_box.addWidget(self.delay_seg)
-        header.addLayout(delay_box)
+        header.addSpacing(6)
+        self.delay_menu_button, self.delay_seg = self._build_delay_control()
+        header.addWidget(self.delay_menu_button)
 
         header.addStretch(1)
 
-        for tip, command in (
-                ("Remove capture (Del)", self.clearRequested.emit),
-                ("Copy (Ctrl+C)", self.copyRequested.emit),
-                ("Save as… (Ctrl+S)", self.saveRequested.emit),
-                ("Quick save (Ctrl+Q)", self.quickSaveRequested.emit),
-                ("Settings", self.settingsRequested.emit)):
-            glyph = {"Remove capture (Del)": "×", "Copy (Ctrl+C)": "⧉",
-                    "Save as… (Ctrl+S)": "💾", "Quick save (Ctrl+Q)": "↓",
-                    "Settings": "⚙"}[tip]
-            btn = ModernButton(glyph, command=command, variant="plain",
-                              width=40, height=40)
-            btn.setToolTip(tip)
-            header.addWidget(btn)
+        overflow_btn = ModernButton(variant="plain", width=38, height=36,
+                                    pill=True, icon_name="more", icon_size=18)
+        overflow_btn.setToolTip("More actions")
+        overflow_btn.clicked.connect(lambda: self._show_overflow_menu(overflow_btn))
+        header.addWidget(overflow_btn)
+
+        settings_btn = ModernButton(command=self.settingsRequested.emit,
+                                    variant="plain", width=36, height=36,
+                                    pill=True, icon_name="settings", icon_size=17)
+        settings_btn.setToolTip("Settings")
+        header.addWidget(settings_btn)
 
         return header
 
-    def _build_toolbar(self):
-        card = Card(padding=8)
-        row = QHBoxLayout()
-        row.setSpacing(2)
-        card.addLayout(row)
+    def _build_delay_control(self):
+        # Deferred import avoids a cycle (float_toolbar imports theme, which
+        # is fine, but keeps SegmentedControl next to its only remaining use).
+        from ..widgets.segmented import SegmentedControl
+        wrapper = QWidget()
+        box = QVBoxLayout(wrapper)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(2)
+        label = QLabel("Delay")
+        label.setStyleSheet("color: palette(mid); font-size: 8pt;")
+        box.addWidget(label)
+        seg = SegmentedControl(["0s", "3s", "10s"], value="0s", seg_width=38, height=23)
+        seg.valueChanged.connect(self.delayChanged.emit)
+        box.addWidget(seg)
+        return wrapper, seg
 
-        for name, glyph, tip in TOOLS:
-            btn = ModernButton(glyph, command=lambda n=name: self.toolSelected.emit(n),
-                              variant="plain", width=38, height=38)
-            btn.setToolTip(tip)
-            row.addWidget(btn)
-            self.tool_buttons[name] = btn
-
-        row.addWidget(self._divider())
-        for color in ANNOT_COLORS:
-            dot = ColorSwatch(color)
-            dot.clicked.connect(self.colorSelected.emit)
-            row.addWidget(dot)
-            self.color_swatches[color] = dot
-
-        row.addWidget(self._divider())
-        for width in ANNOT_WIDTHS:
-            dot = WidthSwatch(width)
-            dot.clicked.connect(self.widthSelected.emit)
-            row.addWidget(dot)
-            self.width_swatches[width] = dot
-
-        row.addStretch(1)
-        undo_btn = ModernButton("↺", command=self.undoRequested.emit,
-                                variant="plain", width=38, height=38)
-        undo_btn.setToolTip("Undo (Ctrl+Z)")
-        row.addWidget(undo_btn)
-        return card
-
-    @staticmethod
-    def _divider():
-        line = QFrame()
-        line.setFrameShape(QFrame.Shape.VLine)
-        line.setFixedWidth(1)
-        line.setStyleSheet("background: palette(mid);")
-        return line
+    def _show_overflow_menu(self, anchor_button):
+        menu = QMenu(self)
+        menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        menu.addAction("Save As…  (Ctrl+S)", self.saveRequested.emit)
+        menu.addAction("Quick Save  (Ctrl+Q)", self.quickSaveRequested.emit)
+        menu.addAction("Copy to Clipboard  (Ctrl+C)", self.copyRequested.emit)
+        menu.addSeparator()
+        menu.addAction("Remove Capture  (Del)", self.clearRequested.emit)
+        pos = anchor_button.mapToGlobal(anchor_button.rect().bottomLeft())
+        menu.exec(pos)
 
     # -- selection visuals, driven by MainWindow after mutating shared state --
+    @property
+    def preview(self):
+        return self.preview_area.preview
+
     def set_active_tool(self, tool):
-        for name, btn in self.tool_buttons.items():
-            btn.set_selected(name == tool)
+        self.preview_area.toolbar.set_active_tool(tool)
 
     def set_active_color(self, color):
-        for c, dot in self.color_swatches.items():
-            dot.set_selected(c == color)
+        self.preview_area.toolbar.set_active_color(color)
 
     def set_active_width(self, width):
-        for w, dot in self.width_swatches.items():
-            dot.set_selected(w == width)
+        self.preview_area.toolbar.set_active_width(width)
 
     def set_status(self, message):
         self.status_label.setText(message)
+
+    def update_capture_presence(self, has_capture):
+        self.preview_area.set_toolbar_visible(has_capture)

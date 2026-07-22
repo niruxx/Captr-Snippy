@@ -45,15 +45,16 @@ class SettingsView(QWidget):
         self._monitors = list_monitors()
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(28, 22, 28, 12)
+        outer.setContentsMargins(20, 16, 20, 10)
 
         top = QHBoxLayout()
-        back_btn = ModernButton("←", command=self.backRequested.emit,
-                                variant="plain", width=42, height=42)
+        back_btn = ModernButton(command=self.backRequested.emit,
+                                variant="plain", width=36, height=36,
+                                pill=True, icon_name="back", icon_size=16)
         back_btn.setToolTip("Back")
         top.addWidget(back_btn)
         title = QLabel("Settings")
-        title.setStyleSheet("font-size: 16pt; font-weight: 600;")
+        title.setStyleSheet("font-size: 14pt; font-weight: 600;")
         top.addWidget(title)
         top.addStretch(1)
         outer.addLayout(top)
@@ -128,7 +129,7 @@ class SettingsView(QWidget):
         dir_header.addWidget(QLabel("Quick save folder"))
         dir_header.addStretch(1)
         change_btn = ModernButton("Change", command=self._choose_quick_save_dir,
-                                  variant="glass", width=76, height=28)
+                                  variant="glass", width=68, height=26)
         dir_header.addWidget(change_btn)
         dir_card.addLayout(dir_header)
         self._dir_label = QLabel(self.settings["quick_save_dir"])
@@ -156,14 +157,14 @@ class SettingsView(QWidget):
         card = Card()
         card.addWidget(QLabel("Video format"))
         video_seg = SegmentedControl(list(VIDEO_FORMATS),
-                                     value=self.settings["video_format"], seg_width=64)
+                                     value=self.settings["video_format"], seg_width=56)
         video_seg.valueChanged.connect(self._set_video_format)
         card.addWidget(video_seg)
 
         card.addWidget(QLabel("Frame rate"))
         fps_choices = sorted(set(RECORD_FPS_OPTIONS) | {self.settings["record_fps"]})
         fps_seg = SegmentedControl([str(v) for v in fps_choices],
-                                   value=str(self.settings["record_fps"]), seg_width=52)
+                                   value=str(self.settings["record_fps"]), seg_width=46)
         fps_seg.valueChanged.connect(self._set_record_fps)
         card.addWidget(fps_seg)
 
@@ -179,7 +180,7 @@ class SettingsView(QWidget):
         source_label_by_value = dict(zip(source_values, source_labels))
         current_label = source_label_by_value.get(
             self.settings["record_source"], "Entire desktop")
-        source_seg = SegmentedControl(source_labels, value=current_label, seg_width=112)
+        source_seg = SegmentedControl(source_labels, value=current_label, seg_width=96)
         source_seg.valueChanged.connect(self._set_record_source)
         card.addWidget(source_seg)
 

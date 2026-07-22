@@ -4,14 +4,16 @@ excluded from the recording itself via SetWindowDisplayAffinity. Dragging
 uses Qt's native `startSystemMove()`.
 """
 
-from PySide6.QtCore import QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QRectF, Qt, QSize, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
+from PySide6.QtWidgets import (QGraphicsDropShadowEffect, QHBoxLayout, QLabel,
+                               QPushButton, QWidget)
 
-from ..theme import get_palette
+from .. import icons
+from ..theme import GLASS_STRONG, get_palette, qcolor
 from ..win_integration import exclude_from_capture
 
-WIDTH, HEIGHT = 240, 52
+WIDTH, HEIGHT = 208, 46
 
 
 class RecordControlBar(QWidget):
@@ -29,19 +31,22 @@ class RecordControlBar(QWidget):
         self._blink_on = True
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(18, 8, 10, 8)
-        self._dot = QLabel("●")
+        layout.setContentsMargins(16, 6, 8, 6)
+        self._dot = QLabel()
+        self._dot.setFixedSize(12, 12)
         layout.addWidget(self._dot)
         self._timer_label = QLabel("00:00")
         layout.addWidget(self._timer_label)
         layout.addStretch(1)
-        self._pause_btn = QPushButton("⏸")
-        self._pause_btn.setFixedSize(32, 32)
+        self._pause_btn = QPushButton()
+        self._pause_btn.setIconSize(QSize(12, 12))
+        self._pause_btn.setFixedSize(28, 28)
         self._pause_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._pause_btn.clicked.connect(self.pauseClicked.emit)
         layout.addWidget(self._pause_btn)
-        self._stop_btn = QPushButton("⏹")
-        self._stop_btn.setFixedSize(32, 32)
+        self._stop_btn = QPushButton()
+        self._stop_btn.setIconSize(QSize(12, 12))
+        self._stop_btn.setFixedSize(28, 28)
         self._stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._stop_btn.clicked.connect(self.stopClicked.emit)
         layout.addWidget(self._stop_btn)
@@ -50,22 +55,39 @@ class RecordControlBar(QWidget):
         self._blink_timer.timeout.connect(self._blink)
         self._blink_timer.start(500)
 
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(30)
+        shadow.setOffset(0, 8)
+        shadow.setColor(QColor(0, 0, 0, 90))
+        self.setGraphicsEffect(shadow)
+
         self._apply_palette()
+        self._refresh_icons()
 
     def set_palette(self, col):
         self._col = col
         self._apply_palette()
+        self._refresh_icons()
         self.update()
 
     def _apply_palette(self):
         col = self._col
         style = f"""
-            QLabel {{ background: transparent; color: {col['text']}; font-weight: 600; }}
-            QPushButton {{ background: transparent; border: none; border-radius: 16px;
-                          color: {col['text']}; font-size: 13px; }}
+            QLabel {{ background: transparent; }}
+            QPushButton {{ background: transparent; border: none; border-radius: 16px; }}
             QPushButton:hover {{ background: {col['hover']}; }}
         """
         self.setStyleSheet(style)
+
+    def _refresh_icons(self):
+        col = self._col
+        self._pause_btn.setIcon(icons.make_icon("play" if self._paused else "pause", col["text"]))
+        self._stop_btn.setIcon(icons.make_icon("stop", col["text"]))
+        if self._paused:
+            dot_color = col["text_tertiary"]
+        else:
+            dot_color = col["error"] if self._blink_on else col["text_tertiary"]
+        self._dot.setPixmap(icons.make_pixmap("record", dot_color, size=12))
 
     def show_at_top_center(self, screen_geometry):
         x = screen_geometry.x() + (screen_geometry.width() - self.width()) // 2
@@ -80,16 +102,12 @@ class RecordControlBar(QWidget):
 
     def set_paused(self, paused):
         self._paused = paused
-        self._pause_btn.setText("▶" if paused else "⏸")
+        self._refresh_icons()
 
     def _blink(self):
-        col = self._col
-        if self._paused:
-            color = col["text_tertiary"]
-        else:
+        if not self._paused:
             self._blink_on = not self._blink_on
-            color = col["error"] if self._blink_on else col["surface_raised"]
-        self._dot.setStyleSheet(f"color: {color}; background: transparent;")
+        self._refresh_icons()
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -97,9 +115,9 @@ class RecordControlBar(QWidget):
         path = QPainterPath()
         path.addRoundedRect(QRectF(0, 0, self.width(), self.height()),
                             self.height() / 2, self.height() / 2)
-        painter.fillPath(path, QColor(self._col["surface_raised"]))
+        painter.fillPath(path, qcolor(self._col["tint"], GLASS_STRONG))
         pen = painter.pen()
-        pen.setColor(QColor(self._col["border"]))
+        pen.setColor(QColor(self._col["highlight_edge"]))
         painter.setPen(pen)
         painter.drawPath(path)
 

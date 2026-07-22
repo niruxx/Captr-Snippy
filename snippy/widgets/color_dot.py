@@ -14,7 +14,7 @@ from ..theme import get_palette
 class ColorSwatch(QWidget):
     clicked = Signal(str)
 
-    def __init__(self, color, size=24, parent=None):
+    def __init__(self, color, size=20, parent=None):
         super().__init__(parent)
         self.color = color
         self.selected = False
@@ -55,7 +55,7 @@ class ColorSwatch(QWidget):
 class WidthSwatch(QWidget):
     clicked = Signal(int)
 
-    def __init__(self, width_value, size=24, parent=None):
+    def __init__(self, width_value, size=20, parent=None):
         super().__init__(parent)
         self.width_value = width_value
         self.selected = False
