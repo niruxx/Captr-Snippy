@@ -1,14 +1,17 @@
 """HistoryRail - replaces _render_history()'s thumbnail strip. A plain
 QHBoxLayout of clickable thumbnail buttons; Qt's own widget lifecycle
 handles pixmap/QIcon caching, so no manual PhotoImage-retention dance is
-needed the way Tkinter required.
+needed the way Tkinter required. Collapses to zero height with nothing in
+history, rather than reserving a permanent placeholder row, so the empty
+state (what you see right after picking Screenshot from the landing page)
+stays as compact as possible.
 """
 
 from PIL import Image
 from PIL.ImageQt import ImageQt
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QIcon, QPixmap
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QPushButton, QWidget
 
 THUMB_W, THUMB_H = 96, 60
 
@@ -37,10 +40,9 @@ class HistoryRail(QWidget):
                 widget.deleteLater()
 
         if not capture_state.history:
-            placeholder = QLabel("Recent captures appear here")
-            self._layout.addWidget(placeholder)
-            self._layout.addStretch(1)
+            self.hide()
             return
+        self.show()
 
         for i, image in enumerate(capture_state.history):
             thumb = image.copy()

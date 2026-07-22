@@ -14,8 +14,7 @@ from PIL import ImageGrab
 from PySide6.QtCore import QRectF, Qt, QTimer
 from PySide6.QtGui import (QColor, QKeySequence, QLinearGradient, QPainter,
                            QPainterPath, QShortcut)
-from PySide6.QtWidgets import (QApplication, QFileDialog, QMessageBox,
-                               QSizeGrip, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import QFileDialog, QMessageBox, QSizeGrip, QVBoxLayout, QWidget
 
 from .anim import animate
 from .capture import DesktopGrabber, list_monitors, list_windows
@@ -38,8 +37,8 @@ from .widgets.slide_stack import SlideStack
 from .widgets.titlebar import CustomTitleBar
 from .widgets.toast import Toast
 
-WINDOW_SIZE = (960, 700)
-MIN_SIZE = (820, 600)
+WINDOW_SIZE = (880, 640)
+MIN_SIZE = (760, 560)
 WINDOW_RADIUS = 10
 FADE_MS = 200
 
@@ -564,12 +563,6 @@ class MainWindow(QWidget):
     def closeEvent(self, event):
         if self._closing:
             super().closeEvent(event)
-            # quitOnLastWindowClosed is disabled (see app.py) since this
-            # window gets legitimately hidden - not closed - while recording,
-            # and the floating RecordControlBar (a Qt::Tool window) doesn't
-            # count towards that check anyway - so closing the real window
-            # must explicitly end the app itself.
-            QApplication.instance().quit()
             return
         self._closing = True
         event.ignore()

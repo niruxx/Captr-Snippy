@@ -205,6 +205,17 @@ def _draw_fullscreen(p, s, color):
         p.drawLine(QPointF(cx, cy), QPointF(cx, cy + dy * arm))
 
 
+def _draw_timer(p, s, color):
+    p.setPen(_pen(color, s, 0.09))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    cx, cy, r = 0.5 * s, 0.56 * s, 0.32 * s
+    p.drawEllipse(QPointF(cx, cy), r, r)
+    p.drawLine(_pt(0.5, 0.56, s), _pt(0.5, 0.36, s))
+    p.drawLine(_pt(0.5, 0.56, s), _pt(0.64, 0.56, s))
+    p.drawLine(_pt(0.40, 0.14, s), _pt(0.60, 0.14, s))
+    p.drawLine(_pt(0.5, 0.14, s), _pt(0.5, 0.24, s))
+
+
 def _draw_record(p, s, color):
     p.setPen(Qt.PenStyle.NoPen)
     p.setBrush(QColor(color))
@@ -264,6 +275,7 @@ _DRAWERS = {
     "back": _draw_back,
     "plus": _draw_plus,
     "fullscreen": _draw_fullscreen,
+    "timer": _draw_timer,
     "record": _draw_record,
     "pause": _draw_pause,
     "play": _draw_play,

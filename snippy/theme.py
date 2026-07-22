@@ -1,11 +1,15 @@
 """Color palette and QSS stylesheet generation.
 
-A soft violet/indigo accent on warm neutral backgrounds, with translucent
-glass panels (via `#AARRGGBB` colors - Qt's QSS *and* QColor both parse this
-format, so the same palette values work for stylesheet rules and for
-QPainter-based custom widgets) and soft drop shadows for elevation. A single
-accent hue drives every "active" state (buttons, toggles, selection) rather
-than mixing separate brand colors, per DTK convention.
+A single violet/indigo accent against near-black (dark theme) or warm
+neutral (light theme) backgrounds, with translucent glass panels (via
+`#AARRGGBB` colors - Qt's QSS *and* QColor both parse this format, so the
+same palette values work for stylesheet rules and for QPainter-based custom
+widgets) and soft drop shadows for elevation. The dark theme leans all the
+way toward true black rather than a lighter charcoal, so panels need to
+read as "elevated" primarily through their tint/border rather than through
+contrast with the backdrop. A single accent hue drives every "active" state
+(buttons, toggles, selection) rather than mixing separate brand colors, per
+DTK convention.
 """
 
 import sys
@@ -67,17 +71,19 @@ PRESSED_ALPHA = 0.13
 
 def get_palette(dark):
     if dark:
-        tint = "#242130"        # panel glass tint - warm, slightly violet charcoal
+        tint = "#161618"        # panel glass tint - near-black neutral gray,
+                                # just light enough to read as "elevated"
+                                # against the pure-black window backdrop
         white = "#FFFFFF"
         return {
-            "bg_top":          "#181622",
-            "bg_bottom":       "#100E18",
+            "bg_top":          "#0B0B0D",
+            "bg_bottom":       "#000000",
             "tint":            tint,
-            "border":          blend("#000000", white, 0.16),
-            "border_soft":     blend("#000000", white, 0.09),
-            "text":            "#F3F1FA",
-            "text_secondary":  blend("#000000", white, 0.62),
-            "text_tertiary":   blend("#000000", white, 0.40),
+            "border":          blend("#000000", white, 0.14),
+            "border_soft":     blend("#000000", white, 0.07),
+            "text":            "#F5F5F7",
+            "text_secondary":  blend("#000000", white, 0.60),
+            "text_tertiary":   blend("#000000", white, 0.38),
             "accent":          "#8C7CFF",
             "accent_hover":    "#A398FF",
             "accent_text":     "#FFFFFF",
@@ -85,8 +91,8 @@ def get_palette(dark):
             "error":           "#FF6B81",
             "hover":           translucent(white, HOVER_ALPHA),
             "pressed":         translucent(white, PRESSED_ALPHA),
-            "shadow":          "#00000090",
-            "highlight_edge":  translucent(white, 0.16),
+            "shadow":          "#000000B0",
+            "highlight_edge":  translucent(white, 0.14),
         }
     return {
         "bg_top":          "#F6F5FC",
