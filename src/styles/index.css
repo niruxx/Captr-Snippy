@@ -1,0 +1,241 @@
+@import "tailwindcss";
+
+/* Design tokens - originally a direct port of snippy/theme.py's
+get_palette(), now extended with a second gradient hue, glow shadows, and
+spring-timed motion for the "glass studio" redesign (deliberately not
+Material Design: no flat elevation shadows, no ripple, floating pill/glass
+surfaces with colored glow instead of umbra). Raw hex/rgba values live on
+:root (light) and are overridden under .dark; @theme below just points
+Tailwind's generated utilities (bg-accent, text-text-secondary, etc.) at
+those custom properties, so class names stay theme-agnostic and swapping
+is just toggling the `dark` class on <html>. */
+@theme {
+  --color-bg-top: var(--bg-top);
+  --color-bg-bottom: var(--bg-bottom);
+  --color-surface: var(--surface);
+  --color-surface-strong: var(--surface-strong);
+  --color-border: var(--border);
+  --color-border-soft: var(--border-soft);
+  --color-text: var(--text);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-tertiary: var(--text-tertiary);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-text: var(--accent-text);
+  --color-accent-glow: var(--accent-glow);
+  --color-error: var(--error);
+  --color-hover: var(--hover);
+  --color-pressed: var(--pressed);
+  --color-highlight-edge: var(--highlight-edge);
+
+  --radius-window: 14px;
+  --radius-card: 14px;
+  --radius-control: 10px;
+  --radius-dock: 9999px;
+
+  --font-sans: "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+
+  /* An overshoot/bounce curve - the signature of the redesign's motion
+  language, used anywhere something should feel alive rather than
+  mechanically eased (button presses, panel/tool transitions, capture
+  entrance). Standard Material easing is deliberately avoided. */
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-smooth: cubic-bezier(0.16, 1, 0.3, 1);
+
+  --animate-capture-in: capture-in 0.5s var(--ease-spring) both;
+  --animate-pop-in: pop-in 0.35s var(--ease-spring) both;
+  --animate-toast-in: toast-in 0.4s var(--ease-spring) both;
+  --animate-drift: drift 6s ease-in-out infinite;
+
+  @keyframes capture-in {
+    from {
+      opacity: 0;
+      transform: scale(0.94) translateY(6px);
+      filter: blur(6px);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1) translateY(0);
+      filter: blur(0);
+    }
+  }
+  @keyframes pop-in {
+    from {
+      opacity: 0;
+      transform: scale(0.85) translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1) translateY(0);
+    }
+  }
+  @keyframes toast-in {
+    from {
+      opacity: 0;
+      transform: translate(-50%, 12px) scale(0.92);
+    }
+    to {
+      opacity: 1;
+      transform: translate(-50%, 0) scale(1);
+    }
+  }
+  @keyframes drift {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-4px);
+    }
+  }
+}
+
+:root {
+  --bg-top: #f8f6fd;
+  --bg-bottom: #ece7f9;
+  --surface: rgb(255 255 255 / 88%);
+  --surface-strong: rgb(255 255 255 / 96%);
+  --border: #e2dfee;
+  --border-soft: #edebf6;
+  --text: #1e1b2e;
+  --text-secondary: #6c6880;
+  --text-tertiary: #a6a2b8;
+  --accent: #6c5ce7;
+  --accent-hover: #8072ed;
+  --accent-text: #ffffff;
+  --accent-glow: #e26cd8;
+  --accent-glow-shadow: rgb(108 92 231 / 45%);
+  --error: #f0506e;
+  --hover: rgb(0 0 0 / 7%);
+  --pressed: rgb(0 0 0 / 13%);
+  --highlight-edge: rgb(255 255 255 / 80%);
+}
+
+.dark {
+  --bg-top: #100d19;
+  --bg-bottom: #020103;
+  --surface: rgb(24 21 30 / 88%);
+  --surface-strong: rgb(26 23 33 / 96%);
+  --border: rgb(255 255 255 / 14%);
+  --border-soft: rgb(255 255 255 / 7%);
+  --text: #f5f5f7;
+  --text-secondary: rgb(255 255 255 / 60%);
+  --text-tertiary: rgb(255 255 255 / 38%);
+  --accent: #8c7cff;
+  --accent-hover: #a398ff;
+  --accent-text: #ffffff;
+  --accent-glow: #ff8cdc;
+  --accent-glow-shadow: rgb(140 124 255 / 45%);
+  --error: #ff6b81;
+  --hover: rgb(255 255 255 / 7%);
+  --pressed: rgb(255 255 255 / 13%);
+  --highlight-edge: rgb(255 255 255 / 14%);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  overscroll-behavior: none;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+/* Custom range slider - the native control's browser-default chrome
+clashes with everything else here, so it gets the same gradient/glow
+treatment as the segmented control's selected thumb and the toggle
+switch. */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 9999px;
+  background: var(--border-soft);
+  cursor: pointer;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 9999px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-glow));
+  box-shadow: 0 0 0 3px var(--surface-strong), 0 2px 8px -1px var(--accent-glow-shadow);
+  transition: transform 0.2s var(--ease-spring);
+}
+input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+input[type="range"]::-webkit-slider-thumb:active {
+  transform: scale(0.95);
+}
+input[type="range"]::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border: none;
+  border-radius: 9999px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-glow));
+  box-shadow: 0 0 0 3px var(--surface-strong), 0 2px 8px -1px var(--accent-glow-shadow);
+}
+
+/* Animated background blobs (Aurora/Sunset themes) - large, heavily
+blurred radial gradients that slowly drift and breathe. Three independent
+keyframe paths/durations so the blobs don't move in visible lockstep. Pure
+CSS transform/opacity animation (GPU-composited, no JS/canvas needed) for
+a background that's always running behind the glass panels. */
+.bg-blob {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(70px);
+  mix-blend-mode: var(--blob-blend, normal);
+  will-change: transform;
+}
+@keyframes blob-drift-a {
+  0% {
+    transform: translate(-8%, -6%) scale(1);
+  }
+  50% {
+    transform: translate(6%, 8%) scale(1.15);
+  }
+  100% {
+    transform: translate(-8%, -6%) scale(1);
+  }
+}
+@keyframes blob-drift-b {
+  0% {
+    transform: translate(10%, -4%) scale(1.05);
+  }
+  50% {
+    transform: translate(-6%, 10%) scale(0.9);
+  }
+  100% {
+    transform: translate(10%, -4%) scale(1.05);
+  }
+}
+@keyframes blob-drift-c {
+  0% {
+    transform: translate(-4%, 10%) scale(0.95);
+  }
+  50% {
+    transform: translate(8%, -8%) scale(1.1);
+  }
+  100% {
+    transform: translate(-4%, 10%) scale(0.95);
+  }
+}
+.bg-blob-a {
+  animation: blob-drift-a 22s ease-in-out infinite;
+}
+.bg-blob-b {
+  animation: blob-drift-b 26s ease-in-out infinite;
+}
+.bg-blob-c {
+  animation: blob-drift-c 19s ease-in-out infinite;
+}

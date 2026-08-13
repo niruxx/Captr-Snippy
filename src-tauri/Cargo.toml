@@ -1,0 +1,46 @@
+[package]
+name = "snippy"
+version = "0.2.0"
+description = "Screenshot & Screen Recording Studio"
+authors = ["you"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "snippy_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+xcap = "0.9.8"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "bmp"] }
+base64 = "0.23.1"
+webp = "0.3.1"
+tauri-plugin-dialog = "2.7.2"
+tauri-plugin-clipboard-manager = "2.3.2"
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-autostart = "2"
+
+# Win32 FFI for the pieces xcap/Tauri don't cover: enumerating monitors and
+# windows with the exact same predicate the Python build used (so the
+# "record a window" picker keeps behaving identically), and later
+# SetWindowDisplayAffinity (hide the record bar from its own recording) and
+# HDR display detection.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "=0.61.3", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Devices_Display",
+] }
+
