@@ -79,13 +79,191 @@ mod windows_impl {
 #[cfg(windows)]
 pub use windows_impl::displays_hdr_status;
 
-/// Left as "unknown" (empty) on every non-Windows platform, Linux
-/// included: there's no cross-desktop-environment equivalent of
-/// `DisplayConfigGetDeviceInfo` - HDR/color-management state lives behind
-/// compositor-specific, still-unstable protocols (e.g. Wayland's
-/// `color-management-v1`, GNOME- and KDE-specific D-Bus interfaces) with no
-/// shared query surface, so there's nothing generic to port here.
-#[cfg(not(windows))]
+/// HDR detection via the `color-management-v1` Wayland protocol - the
+/// emerging cross-desktop standard for querying an output's color state,
+/// supported by recent KDE (KWin) and GNOME (Mutter). Each `wl_output`'s
+/// current image description is fetched and its transfer function checked
+/// against the two named HDR curves (`st2084_pq` = HDR10/PQ, `hlg` = Hybrid
+/// Log-Gamma); anything else (`srgb`, `bt1886`, etc.) means that output is
+/// in SDR mode. `supported: false` only means the compositor answered but
+/// its image description had no queryable info - not "no HDR".
+///
+/// This has no X11 equivalent (X11 predates HDR and has no color-state
+/// protocol at all), and it's a no-op on any compositor that doesn't
+/// advertise the protocol yet - both cases just return `[]`, same
+/// "unknown, not no-HDR" contract as the Windows pre-1903 fallback.
+#[cfg(target_os = "linux")]
+mod linux_impl {
+    use super::DisplayColorStatus;
+    use std::collections::HashMap;
+    use wayland_client::{
+        delegate_noop,
+        protocol::{wl_output::WlOutput, wl_registry},
+        Connection, Dispatch, EventQueue, Proxy, QueueHandle,
+    };
+    use wayland_protocols::wp::color_management::v1::client::{
+        wp_color_management_output_v1::WpColorManagementOutputV1,
+        wp_color_manager_v1::{self, WpColorManagerV1},
+        wp_image_description_info_v1::{self, WpImageDescriptionInfoV1},
+        wp_image_description_v1::{self, WpImageDescriptionV1},
+    };
+
+    struct State {
+        color_manager: Option<WpColorManagerV1>,
+        outputs: Vec<(u32, WlOutput)>,
+        results: Vec<DisplayColorStatus>,
+        /// Whether an in-flight image description's `tf_named` event
+        /// reported an HDR transfer function, keyed by the
+        /// `wp_image_description_info_v1` object id.
+        hdr_seen: HashMap<u32, bool>,
+    }
+
+    impl Dispatch<wl_registry::WlRegistry, ()> for State {
+        fn event(
+            state: &mut Self,
+            registry: &wl_registry::WlRegistry,
+            event: wl_registry::Event,
+            _data: &(),
+            _conn: &Connection,
+            qh: &QueueHandle<Self>,
+        ) {
+            let wl_registry::Event::Global { name, interface, version } = event else {
+                return;
+            };
+            match interface.as_str() {
+                "wp_color_manager_v1" => {
+                    state.color_manager =
+                        Some(registry.bind::<WpColorManagerV1, _, _>(name, version.min(1), qh, ()));
+                }
+                "wl_output" => {
+                    let output = registry.bind::<WlOutput, _, _>(name, version.min(4), qh, ());
+                    state.outputs.push((name, output));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    delegate_noop!(State: ignore WlOutput);
+    delegate_noop!(State: ignore WpColorManagerV1);
+    delegate_noop!(State: ignore WpColorManagementOutputV1);
+
+    /// User data is the owning output's registry name, threaded through so
+    /// the final result can be attributed to the right `target_id`.
+    impl Dispatch<WpImageDescriptionV1, u32> for State {
+        fn event(
+            state: &mut Self,
+            image_description: &WpImageDescriptionV1,
+            event: wp_image_description_v1::Event,
+            output_name: &u32,
+            _conn: &Connection,
+            qh: &QueueHandle<Self>,
+        ) {
+            match event {
+                wp_image_description_v1::Event::Ready { .. } => {
+                    image_description.get_information(qh, *output_name);
+                }
+                wp_image_description_v1::Event::Failed { .. } => {
+                    state.results.push(DisplayColorStatus {
+                        target_id: *output_name,
+                        supported: false,
+                        enabled: false,
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+
+    impl Dispatch<WpImageDescriptionInfoV1, u32> for State {
+        fn event(
+            state: &mut Self,
+            info: &WpImageDescriptionInfoV1,
+            event: wp_image_description_info_v1::Event,
+            output_name: &u32,
+            _conn: &Connection,
+            _qh: &QueueHandle<Self>,
+        ) {
+            match event {
+                wp_image_description_info_v1::Event::TfNamed { tf } => {
+                    let is_hdr = matches!(
+                        tf.into_result(),
+                        Ok(wp_color_manager_v1::TransferFunction::St2084Pq)
+                            | Ok(wp_color_manager_v1::TransferFunction::Hlg)
+                    );
+                    if is_hdr {
+                        state.hdr_seen.insert(info.id().protocol_id(), true);
+                    }
+                }
+                wp_image_description_info_v1::Event::Done => {
+                    let enabled = state.hdr_seen.remove(&info.id().protocol_id()).unwrap_or(false);
+                    state.results.push(DisplayColorStatus {
+                        target_id: *output_name,
+                        supported: true,
+                        enabled,
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+
+    pub fn displays_hdr_status() -> Vec<DisplayColorStatus> {
+        let Ok(conn) = Connection::connect_to_env() else {
+            return Vec::new();
+        };
+        let mut event_queue: EventQueue<State> = conn.new_event_queue();
+        let qh = event_queue.handle();
+        conn.display().get_registry(&qh, ());
+
+        let mut state = State {
+            color_manager: None,
+            outputs: Vec::new(),
+            results: Vec::new(),
+            hdr_seen: HashMap::new(),
+        };
+
+        // One round-trip is enough for every `global` advertisement
+        // (color manager + outputs) to arrive.
+        if event_queue.roundtrip(&mut state).is_err() {
+            return Vec::new();
+        }
+
+        let (Some(color_manager), false) = (state.color_manager.clone(), state.outputs.is_empty())
+        else {
+            return Vec::new();
+        };
+
+        let expected = state.outputs.len();
+        for (name, output) in state.outputs.clone() {
+            let cmo = color_manager.get_output(&output, &qh, ());
+            cmo.get_image_description(&qh, name);
+        }
+
+        // Each output's chain (get_image_description -> ready ->
+        // get_information -> tf_named* -> done) needs its own round-trip
+        // to fully resolve; this loop just bounds how long we wait.
+        for _ in 0..expected + 4 {
+            if state.results.len() >= expected {
+                break;
+            }
+            if event_queue.roundtrip(&mut state).is_err() {
+                break;
+            }
+        }
+
+        state.results
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub use linux_impl::displays_hdr_status;
+
+/// Left as "unknown" (empty) on every other non-Windows platform: there's
+/// no cross-desktop-environment equivalent of `DisplayConfigGetDeviceInfo`,
+/// and macOS/other targets aren't covered by the Wayland protocol path
+/// above.
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn displays_hdr_status() -> Vec<DisplayColorStatus> {
     Vec::new()
 }

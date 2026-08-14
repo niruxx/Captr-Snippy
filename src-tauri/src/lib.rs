@@ -125,6 +125,7 @@ pub fn run() {
             recording_cmds::resume_recording,
             recording_cmds::get_recording_status,
             recording_cmds::discard_recording,
+            recording_cmds::get_capture_bounds,
             window_affinity::exclude_window_from_capture,
         ])
         .run(tauri::generate_context!())

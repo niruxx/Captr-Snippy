@@ -1,6 +1,6 @@
 # Snippy - Screenshot & Screen Recording Studio
 
-A screenshot, annotation, and screen-recording desktop app with a frameless, translucent "glass" UI. Capture a region or the full screen, annotate it, keep a history of recent captures, and record your desktop, a single monitor, or one window to video. Built Windows-first; also builds and runs on Linux (X11 and XWayland), with a few platform gaps noted in [Known Gaps](#known-gaps--future-work).
+A screenshot, annotation, and screen-recording desktop app with a frameless, translucent "glass" UI. Capture a region or the full screen, annotate it, keep a history of recent captures, and record your desktop, a single monitor, or one window to video. Built Windows-first; also builds and runs on Linux (X11, XWayland, and partially native Wayland), with a few platform gaps noted in [Known Gaps](#known-gaps--future-work).
 
 Built with **Tauri 2**, a **Rust** backend, and a **React 19 + TypeScript + Tailwind CSS v4** frontend.
 
@@ -176,10 +176,10 @@ Every setting in the Settings screen is persisted to `settings.json` in the app'
 
 - GPU-accelerated capture (DXGI Desktop Duplication) — currently uses BitBlt-class capture via `xcap`; a GPU-accelerated path is a possible fast-follow for smoother high-fps recording
 - macOS support
-- Linux platform gaps (builds and runs, via X11/XWayland):
+- Linux platform gaps (builds and runs, via X11/XWayland, with partial native-Wayland support):
   - Native-Wayland-only windows (no XWayland surface) don't appear in the "record a window" picker — Wayland gives no app permission to list other clients' windows; there's no userspace fix short of a compositor-mediated portal
-  - The floating record-control bar isn't hidden from its own recording — `SetWindowDisplayAffinity` is a Windows-compositor feature with no X11/Wayland equivalent
-  - HDR display detection always reports "no HDR displays" — no cross-desktop-environment API exists for it yet (Wayland's color-management protocol and GNOME/KDE's own interfaces aren't unified)
+  - The floating record-control bar can't be truly excluded from its own recording — `SetWindowDisplayAffinity` is a Windows-compositor feature with no X11/Wayland equivalent — but it does auto-reposition to just outside the captured region when recording a specific window or monitor, so in practice it only ends up in frame when recording the entire desktop (nowhere to move it to) or when the captured region leaves no room above or below it
+  - HDR display detection works on Wayland compositors that support the `color-management-v1` protocol (recent KDE/KWin and GNOME/Mutter) by reading each output's transfer function; on X11 (which predates HDR and has no color-state protocol) or older/other compositors it reports "unknown", same as the Windows pre-1903 fallback
   - Live cursor compositing in recordings only works under X11/XWayland (via the XFixes extension); native Wayland sessions won't show the cursor in recordings
 - No automated release pipeline yet — no CI builds installers or publishes them to GitHub Releases, so build-from-source is the only way to get the app for now
 

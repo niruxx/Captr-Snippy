@@ -10,8 +10,10 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import {
   discardRecording,
   excludeWindowFromCapture,
+  getCaptureBounds,
   getMonitors,
   getRecordingStatus,
+  getVirtualScreen,
   getWindows,
   pauseRecording as ipcPauseRecording,
   resumeRecording as ipcResumeRecording,
@@ -65,7 +67,59 @@ async function resolveSource(): Promise<RecordSourceArg | null> {
   return { kind: "all" };
 }
 
-async function showRecordBar() {
+/** Where the bar would sit by default: horizontally centered, docked to
+ * the top of the primary monitor - unchanged from before this existed. */
+function defaultBarPosition(primary: { left: number; right: number; top: number }): {
+  x: number;
+  y: number;
+} {
+  return {
+    x: primary.left + (primary.right - primary.left - RECORD_BAR_WIDTH) / 2,
+    y: primary.top + RECORD_BAR_TOP_MARGIN,
+  };
+}
+
+/** Nudges the default bar position out of `source`'s captured region when
+ * it would otherwise overlap, for platforms with no
+ * `exclude_window_from_capture` (see that command's Linux branch) - the
+ * bar would otherwise get baked into its own recording. Only tries "just
+ * above" or "just below" the captured region; if neither fits inside the
+ * virtual desktop (e.g. a maximized window, or `source: "all"` has no
+ * region to dodge at all), the bar keeps its default spot exactly like it
+ * did before this existed. */
+async function barPositionAvoidingCapture(
+  source: RecordSourceArg,
+  primary: { left: number; right: number; top: number },
+): Promise<{ x: number; y: number }> {
+  const fallback = defaultBarPosition(primary);
+  try {
+    const [bounds, virtualScreen] = await Promise.all([getCaptureBounds(source), getVirtualScreen()]);
+    if (!bounds || !virtualScreen) return fallback;
+
+    const [left, top, right, bottom] = bounds;
+    const overlaps =
+      fallback.x < right &&
+      fallback.x + RECORD_BAR_WIDTH > left &&
+      fallback.y < bottom &&
+      fallback.y + RECORD_BAR_HEIGHT > top;
+    if (!overlaps) return fallback;
+
+    const x = left + (right - left - RECORD_BAR_WIDTH) / 2;
+    const above = top - RECORD_BAR_TOP_MARGIN - RECORD_BAR_HEIGHT;
+    if (above >= virtualScreen.y) {
+      return { x, y: above };
+    }
+    const below = bottom + RECORD_BAR_TOP_MARGIN;
+    if (below + RECORD_BAR_HEIGHT <= virtualScreen.y + virtualScreen.height) {
+      return { x, y: below };
+    }
+    return fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+async function showRecordBar(source: RecordSourceArg) {
   const monitors = await getMonitors();
   const primary = monitors.find((m) => m.is_primary) ?? monitors[0];
 
@@ -84,8 +138,7 @@ async function showRecordBar() {
 
   bar.once("tauri://created", async () => {
     if (primary) {
-      const x = primary.left + (primary.right - primary.left - RECORD_BAR_WIDTH) / 2;
-      const y = primary.top + RECORD_BAR_TOP_MARGIN;
+      const { x, y } = await barPositionAvoidingCapture(source, primary);
       await bar.setPosition(new PhysicalPosition(Math.round(x), Math.round(y)));
     }
     await bar.show();
@@ -143,7 +196,7 @@ export async function startRecording() {
 
   state.setRecording(true);
   state.setStatusMessage("Recording…");
-  await showRecordBar();
+  await showRecordBar(source);
 }
 
 export async function stopRecording(discard = false) {

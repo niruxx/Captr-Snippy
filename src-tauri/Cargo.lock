@@ -3990,6 +3990,8 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-global-shortcut",
  "tauri-plugin-opener",
+ "wayland-client",
+ "wayland-protocols",
  "webp",
  "windows 0.61.3",
  "xcap",

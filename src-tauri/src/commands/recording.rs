@@ -15,6 +15,21 @@ pub enum RecordSourceArg {
     Window { hwnd: i64 },
 }
 
+/// The screen region a given source would capture, as `(left, top, right,
+/// bottom)` - `None` for `All`, since there's no single region short of the
+/// whole virtual desktop. Exposed so the frontend can keep the floating
+/// record-control bar positioned outside whatever's being recorded on
+/// platforms (Linux) with no OS-level "exclude this window from capture"
+/// primitive to fall back on instead - see `window_affinity.rs`.
+#[tauri::command]
+pub fn get_capture_bounds(source: RecordSourceArg) -> Result<Option<(i32, i32, i32, i32)>, String> {
+    match resolve_source(source)? {
+        GrabSource::All => Ok(None),
+        GrabSource::Monitor(bbox) => Ok(Some((bbox.left, bbox.top, bbox.right, bbox.bottom))),
+        GrabSource::Window(hwnd) => Ok(crate::capture::win_enum::window_rect_if_capturable(hwnd)),
+    }
+}
+
 fn resolve_source(arg: RecordSourceArg) -> Result<GrabSource, String> {
     match arg {
         RecordSourceArg::All => Ok(GrabSource::All),

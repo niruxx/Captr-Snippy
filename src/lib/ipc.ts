@@ -108,3 +108,10 @@ export function excludeWindowFromCapture(label: string): Promise<void> {
 export function getHdrStatus(): Promise<DisplayColorStatus[]> {
   return invoke("get_hdr_status");
 }
+
+/** `[left, top, right, bottom]` of the region `source` would capture, or
+ * `null` for `{ kind: "all" }` (the whole virtual desktop - no single
+ * region to avoid). See `get_capture_bounds` in commands/recording.rs. */
+export function getCaptureBounds(source: RecordSourceArg): Promise<[number, number, number, number] | null> {
+  return invoke("get_capture_bounds", { source });
+}
