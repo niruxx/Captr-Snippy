@@ -1,6 +1,6 @@
 # Snippy - Screenshot & Screen Recording Studio
 
-A Windows screenshot, annotation, and screen-recording desktop app with a frameless, translucent "glass" UI. Capture a region or the full screen, annotate it, keep a history of recent captures, and record your desktop, a single monitor, or one window to video.
+A screenshot, annotation, and screen-recording desktop app with a frameless, translucent "glass" UI. Capture a region or the full screen, annotate it, keep a history of recent captures, and record your desktop, a single monitor, or one window to video. Built Windows-first; also builds and runs on Linux (X11 and XWayland), with a few platform gaps noted in [Known Gaps](#known-gaps--future-work).
 
 Built with **Tauri 2**, a **Rust** backend, and a **React 19 + TypeScript + Tailwind CSS v4** frontend.
 
@@ -62,17 +62,18 @@ There are no pre-built installers published yet — Snippy is currently build-fr
 - [Node.js](https://nodejs.org/) 18+
 - [Rust](https://www.rust-lang.org/tools/install) (stable toolchain, via `rustup`)
 - On Windows: the [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) (Tauri's MSVC toolchain requirement) and [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/) (preinstalled on current Windows 10/11)
-- A static `ffmpeg` binary for the screen-recording sidecar — download a Windows build from [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) and place `ffmpeg.exe` at:
-  ```
-  src-tauri/binaries/ffmpeg-x86_64-pc-windows-msvc.exe
-  ```
-  (This binary is intentionally excluded from git via `.gitignore` — it's ~230MB. The app builds and runs without it, just without screen recording.)
+- On Linux: Tauri's own [system dependencies](https://tauri.app/start/prerequisites/#linux) (`webkit2gtk`, `libappindicator`, `librsvg`, etc.) plus `clang`/`libclang` and `pipewire`'s dev headers, both needed by `xcap` (the capture crate) to build its Wayland portal support — e.g. on Fedora: `sudo dnf install webkit2gtk4.1-devel openssl-devel curl wget file libappindicator-gtk3-devel librsvg2-devel patchelf rpm-build dpkg clang-devel pipewire-devel`
+- A static `ffmpeg` binary for the screen-recording sidecar:
+  - Windows: download a build from [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) and place `ffmpeg.exe` at `src-tauri/binaries/ffmpeg-x86_64-pc-windows-msvc.exe`
+  - Linux: download a static build from [johnvansickle.com](https://johnvansickle.com/ffmpeg/) and place it at `src-tauri/binaries/ffmpeg-x86_64-unknown-linux-gnu` (`chmod +x`)
+
+  (Excluded from git via `.gitignore` on every platform — it's ~100-230MB. The app builds and runs without it, just without screen recording.)
 
 ## Setup
 
 ```bash
-git clone https://github.com/niruxx/Snippy-Evolved.git
-cd Snippy-Evolved
+git clone https://github.com/niruxx/Snippy.git
+cd Snippy
 npm install
 ```
 
@@ -174,7 +175,12 @@ Every setting in the Settings screen is persisted to `settings.json` in the app'
 ## Known Gaps / Future Work
 
 - GPU-accelerated capture (DXGI Desktop Duplication) — currently uses BitBlt-class capture via `xcap`; a GPU-accelerated path is a possible fast-follow for smoother high-fps recording
-- macOS/Linux support
+- macOS support
+- Linux platform gaps (builds and runs, via X11/XWayland):
+  - Native-Wayland-only windows (no XWayland surface) don't appear in the "record a window" picker — Wayland gives no app permission to list other clients' windows; there's no userspace fix short of a compositor-mediated portal
+  - The floating record-control bar isn't hidden from its own recording — `SetWindowDisplayAffinity` is a Windows-compositor feature with no X11/Wayland equivalent
+  - HDR display detection always reports "no HDR displays" — no cross-desktop-environment API exists for it yet (Wayland's color-management protocol and GNOME/KDE's own interfaces aren't unified)
+  - Live cursor compositing in recordings only works under X11/XWayland (via the XFixes extension); native Wayland sessions won't show the cursor in recordings
 - No automated release pipeline yet — no CI builds installers or publishes them to GitHub Releases, so build-from-source is the only way to get the app for now
 
 ## License

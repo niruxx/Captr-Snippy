@@ -145,7 +145,86 @@ mod windows_impl {
 #[cfg(windows)]
 pub use windows_impl::capture_cursor;
 
-#[cfg(not(windows))]
+/// X11/XWayland cursor capture via the XFixes extension's
+/// `GetCursorImage`, the same primitive `xdotool`/`scrot`-class tools use.
+/// No portal-based path exists for native-Wayland sessions - Wayland
+/// compositors intentionally don't let arbitrary clients query the global
+/// cursor image, only screen-capture portals get it (and only baked
+/// straight into their own PipeWire stream, which this app's capture
+/// pipeline doesn't use) - so this stays `None` there.
+#[cfg(target_os = "linux")]
+mod linux_impl {
+    use super::CursorSnapshot;
+    use image::RgbaImage;
+    use std::sync::OnceLock;
+    use xcb::{xfixes, Connection, Extension};
+
+    /// The XFixes connection is reused across calls instead of reconnecting
+    /// every frame - recordings run at up to 240fps, and each fresh X11
+    /// connection is a round-trip handshake that would dominate frame time.
+    fn connection() -> Option<&'static Connection> {
+        static CONN: OnceLock<Option<Connection>> = OnceLock::new();
+        CONN.get_or_init(|| {
+            let (conn, _) =
+                Connection::connect_with_extensions(None, &[Extension::XFixes], &[]).ok()?;
+            // XFixes requires this handshake before any other request.
+            let cookie = conn.send_request(&xfixes::QueryVersion {
+                client_major_version: 5,
+                client_minor_version: 0,
+            });
+            conn.wait_for_reply(cookie).ok()?;
+            Some(conn)
+        })
+        .as_ref()
+    }
+
+    /// XFixes hands back premultiplied-alpha ARGB pixels; undo that so
+    /// `image::imageops::overlay`'s straight-alpha blend doesn't darken
+    /// partially-transparent cursor edge pixels.
+    fn unpremultiply(channel: u8, alpha: u8) -> u8 {
+        if alpha == 0 {
+            0
+        } else {
+            ((channel as u32 * 255) / alpha as u32).min(255) as u8
+        }
+    }
+
+    pub fn capture_cursor() -> Option<CursorSnapshot> {
+        let conn = connection()?;
+
+        let cookie = conn.send_request(&xfixes::GetCursorImage {});
+        let reply = conn.wait_for_reply(cookie).ok()?;
+
+        let (width, height) = (reply.width() as u32, reply.height() as u32);
+        if width == 0 || height == 0 {
+            return None;
+        }
+
+        let mut rgba = vec![0u8; (width * height * 4) as usize];
+        for (i, pixel) in reply.cursor_image().iter().enumerate() {
+            let a = ((pixel >> 24) & 0xff) as u8;
+            let r = ((pixel >> 16) & 0xff) as u8;
+            let g = ((pixel >> 8) & 0xff) as u8;
+            let b = (pixel & 0xff) as u8;
+            rgba[i * 4] = unpremultiply(r, a);
+            rgba[i * 4 + 1] = unpremultiply(g, a);
+            rgba[i * 4 + 2] = unpremultiply(b, a);
+            rgba[i * 4 + 3] = a;
+        }
+
+        let image = RgbaImage::from_raw(width, height, rgba)?;
+        Some(CursorSnapshot {
+            x: reply.x() as i32 - reply.xhot() as i32,
+            y: reply.y() as i32 - reply.yhot() as i32,
+            image,
+        })
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub use linux_impl::capture_cursor;
+
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn capture_cursor() -> Option<CursorSnapshot> {
     None
 }

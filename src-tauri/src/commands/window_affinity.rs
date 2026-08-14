@@ -24,6 +24,12 @@ pub fn exclude_window_from_capture(app: AppHandle, label: String) -> Result<(), 
     }
     #[cfg(not(windows))]
     {
+        // No Linux/X11/Wayland equivalent exists: WDA_EXCLUDEFROMCAPTURE is
+        // implemented by the Windows compositor itself, and neither X11 nor
+        // any Wayland compositor exposes a "skip this window when captured"
+        // primitive to ordinary apps. The floating record-control bar will
+        // show up in Linux recordings; there's no userspace fix short of a
+        // compositor-side feature that doesn't exist yet.
         let _ = window;
     }
 

@@ -2,8 +2,12 @@
 //! verbatim from capture.py's ctypes calls (same predicate, so the "record
 //! a window" picker and multi-monitor math behave identically to the
 //! Python build) - windows-rs just gives typed bindings instead of
-//! hand-defined `ctypes.Structure`s. Everywhere else (non-Windows) these
-//! return empty/None, exactly like the Python versions did.
+//! hand-defined `ctypes.Structure`s. On Linux this is backed by `xcap`
+//! (already a dependency for pixel capture), which talks to X11/XWayland
+//! directly - so native-Wayland-only windows (no XWayland surface) won't
+//! be listed, a protocol-level limitation Wayland imposes on every app,
+//! not something fixable in userspace. Elsewhere (e.g. macOS) these still
+//! return empty/None.
 
 use serde::Serialize;
 
@@ -155,22 +159,120 @@ mod windows_impl {
 #[cfg(windows)]
 pub use windows_impl::{list_monitors, list_windows, virtual_screen, window_rect_if_capturable};
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+mod linux_impl {
+    use super::{MonitorRect, VirtualScreen, WindowEntry};
+    use xcap::{Monitor, Window};
+
+    pub fn virtual_screen() -> Option<VirtualScreen> {
+        let monitors = list_monitors();
+        if monitors.is_empty() {
+            return None;
+        }
+        let left = monitors.iter().map(|m| m.left).min()?;
+        let top = monitors.iter().map(|m| m.top).min()?;
+        let right = monitors.iter().map(|m| m.right).max()?;
+        let bottom = monitors.iter().map(|m| m.bottom).max()?;
+        Some(VirtualScreen {
+            x: left,
+            y: top,
+            width: (right - left).max(0),
+            height: (bottom - top).max(0),
+        })
+    }
+
+    pub fn list_monitors() -> Vec<MonitorRect> {
+        let Ok(monitors) = Monitor::all() else {
+            return Vec::new();
+        };
+        monitors
+            .iter()
+            .filter_map(|monitor| {
+                let x = monitor.x().ok()?;
+                let y = monitor.y().ok()?;
+                let width = monitor.width().ok()? as i32;
+                let height = monitor.height().ok()? as i32;
+                let is_primary = monitor.is_primary().unwrap_or(false);
+                Some(MonitorRect {
+                    left: x,
+                    top: y,
+                    right: x + width,
+                    bottom: y + height,
+                    is_primary,
+                })
+            })
+            .collect()
+    }
+
+    /// `xcap::Window::all()` enumerates X11/XWayland clients, so windows
+    /// belonging to a native-Wayland toolkit backend (no XWayland surface)
+    /// won't appear here - Wayland deliberately gives no app permission to
+    /// list other clients' windows, so there's no userspace fix for that
+    /// gap short of a compositor-mediated portal picker.
+    pub fn list_windows() -> Vec<WindowEntry> {
+        let Ok(windows) = Window::all() else {
+            return Vec::new();
+        };
+        windows
+            .iter()
+            .filter_map(|window| {
+                if window.is_minimized().unwrap_or(false) {
+                    return None;
+                }
+                let title = window.title().ok()?;
+                if title.is_empty() || title == "Snippy" {
+                    return None;
+                }
+                let id = window.id().ok()?;
+                Some(WindowEntry {
+                    hwnd: id as i64,
+                    title,
+                })
+            })
+            .collect()
+    }
+
+    /// Re-enumerates every frame (xcap has no cheaper single-window
+    /// lookup-by-id), mirroring the Windows build's per-frame
+    /// `GetWindowRect`/`IsWindow` validity check.
+    pub fn window_rect_if_capturable(hwnd: i64) -> Option<(i32, i32, i32, i32)> {
+        let windows = Window::all().ok()?;
+        let window = windows
+            .iter()
+            .find(|window| window.id().ok().map(|id| id as i64) == Some(hwnd))?;
+        if window.is_minimized().unwrap_or(false) {
+            return None;
+        }
+        let x = window.x().ok()?;
+        let y = window.y().ok()?;
+        let width = window.width().ok()? as i32;
+        let height = window.height().ok()? as i32;
+        if width <= 0 || height <= 0 {
+            return None;
+        }
+        Some((x, y, x + width, y + height))
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub use linux_impl::{list_monitors, list_windows, virtual_screen, window_rect_if_capturable};
+
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn virtual_screen() -> Option<VirtualScreen> {
     None
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn list_monitors() -> Vec<MonitorRect> {
     Vec::new()
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn list_windows() -> Vec<WindowEntry> {
     Vec::new()
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn window_rect_if_capturable(_hwnd: i64) -> Option<(i32, i32, i32, i32)> {
     None
 }

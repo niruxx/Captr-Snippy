@@ -79,6 +79,12 @@ mod windows_impl {
 #[cfg(windows)]
 pub use windows_impl::displays_hdr_status;
 
+/// Left as "unknown" (empty) on every non-Windows platform, Linux
+/// included: there's no cross-desktop-environment equivalent of
+/// `DisplayConfigGetDeviceInfo` - HDR/color-management state lives behind
+/// compositor-specific, still-unstable protocols (e.g. Wayland's
+/// `color-management-v1`, GNOME- and KDE-specific D-Bus interfaces) with no
+/// shared query surface, so there's nothing generic to port here.
 #[cfg(not(windows))]
 pub fn displays_hdr_status() -> Vec<DisplayColorStatus> {
     Vec::new()

@@ -44,3 +44,9 @@ windows = { version = "=0.61.3", features = [
     "Win32_Devices_Display",
 ] }
 
+# XFixes (via raw X11 protocol, works under X11 and XWayland) for live
+# cursor capture - xcap deliberately doesn't include the cursor in its own
+# captures, and there's no portal-based equivalent for native Wayland.
+[target.'cfg(target_os = "linux")'.dependencies]
+xcb = { version = "1.7", features = ["xfixes"] }
+
