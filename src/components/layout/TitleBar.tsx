@@ -23,10 +23,15 @@ export function TitleBar() {
   const { requestClose } = useWindowChrome();
 
   return (
-    <div data-tauri-drag-region="deep" className="flex h-9 shrink-0 select-none items-center pl-4">
-      <span className="flex items-center gap-2">
-        <span className="h-2 w-2 rounded-full bg-linear-to-br from-accent to-accent-glow shadow-[0_0_8px_var(--accent-glow-shadow)]" />
-        <span className="text-[13px] font-semibold tracking-tight text-text-secondary">Captr</span>
+    <div
+      data-tauri-drag-region="deep"
+      className="flex h-11 shrink-0 select-none items-center border-b border-border-soft bg-surface pl-4"
+    >
+      <span className="flex items-center gap-2.5">
+        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-accent text-accent-text">
+          <Icon name="fullscreen" size={13} />
+        </span>
+        <span className="text-[14px] font-medium tracking-tight text-text">Captr</span>
       </span>
       <div className="flex-1" />
       <div className="flex items-center gap-0.5 pr-2">
@@ -55,7 +60,7 @@ function TitleBarButton({
       aria-label={label}
       title={label}
       onClick={onClick}
-      className={`flex h-6 w-6 cursor-pointer items-center justify-center rounded-full text-text-tertiary transition-all duration-150 active:scale-90 ${
+      className={`flex h-7 w-7 cursor-pointer items-center justify-center rounded-full text-text-tertiary transition-colors duration-150 ${
         danger ? "hover:bg-error hover:text-white" : "hover:bg-hover hover:text-text"
       }`}
     >

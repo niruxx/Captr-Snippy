@@ -71,7 +71,7 @@ export function RecordControlBar() {
   return (
     <div
       data-tauri-drag-region="deep"
-      className="flex h-screen w-screen animate-pop-in items-center gap-2 rounded-full border border-highlight-edge bg-surface-strong/90 px-4 shadow-xl shadow-black/30 backdrop-blur-xl"
+      className="flex h-screen w-screen animate-pop-in items-center gap-2 rounded-full border border-border bg-surface-strong px-4 shadow-xl shadow-black/20"
     >
       <span
         className={`h-3 w-3 shrink-0 rounded-full transition-all duration-300 ${paused ? "bg-text-tertiary" : "bg-error"}`}

@@ -13,7 +13,6 @@ use tauri::{AppHandle, Manager};
 
 pub const FORMATS: [&str; 4] = ["PNG", "JPEG", "WEBP", "BMP"];
 pub const VIDEO_FORMATS: [&str; 4] = ["MP4", "MKV", "FLV", "WEBM"];
-pub const THEMES: [&str; 4] = ["classic", "aurora", "snowfall", "sunset"];
 const RECORD_FPS_RANGE: (i64, i64) = (1, 1000);
 const HISTORY_LIMIT_RANGE: (i64, i64) = (1, 50);
 
@@ -29,9 +28,6 @@ pub struct Settings {
     pub record_scale: f64,
     pub record_extra_ffmpeg_args: Vec<String>,
     pub hdr_tone_map: bool,
-    /// Accent-color + animated-background flavor, applied via CSS custom
-    /// properties on the frontend (see src/lib/themes.ts) - one of [`THEMES`].
-    pub theme: String,
     /// Gates the first-run onboarding flow; set true once it's completed
     /// (or skipped) so it never shows again for this user.
     pub onboarding_complete: bool,
@@ -66,7 +62,6 @@ impl Settings {
             record_scale: 1.0,
             record_extra_ffmpeg_args: Vec::new(),
             hdr_tone_map: false,
-            theme: "classic".into(),
             onboarding_complete: false,
             close_to_tray: false,
             capture_sound: true,
@@ -171,11 +166,6 @@ fn merge_validated(defaults: Settings, saved: &Value) -> Settings {
     }
     if let Some(v) = saved.get("hdr_tone_map").and_then(Value::as_bool) {
         settings.hdr_tone_map = v;
-    }
-    if let Some(v) = saved.get("theme").and_then(Value::as_str) {
-        if THEMES.contains(&v) {
-            settings.theme = v.to_string();
-        }
     }
     if let Some(v) = saved.get("onboarding_complete").and_then(Value::as_bool) {
         settings.onboarding_complete = v;

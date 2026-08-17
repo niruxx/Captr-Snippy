@@ -12,7 +12,6 @@ export interface Settings {
   record_scale: number;
   record_extra_ffmpeg_args: string[];
   hdr_tone_map: boolean;
-  theme: string;
   onboarding_complete: boolean;
   close_to_tray: boolean;
   capture_sound: boolean;

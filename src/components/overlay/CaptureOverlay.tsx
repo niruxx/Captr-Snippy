@@ -85,10 +85,10 @@ export function CaptureOverlay() {
     >
       {rect && (
         <div
-          className="absolute border-2 border-[#8c7cff] bg-[#8c7cff]/10 shadow-[0_0_24px_-4px_rgba(140,124,255,0.7)]"
+          className="absolute border-2 border-[#4285f4] bg-[#4285f4]/10 shadow-[0_0_0_1px_rgba(66,133,244,0.4)]"
           style={{ left: rect.left, top: rect.top, width: rect.width, height: rect.height }}
         >
-          <span className="absolute -top-7 left-0 rounded-full bg-[#1a1721]/90 px-2.5 py-1 text-xs font-bold text-white shadow-lg backdrop-blur-sm">
+          <span className="absolute -top-7 left-0 rounded-md bg-[#202124]/95 px-2.5 py-1 text-xs font-medium text-white shadow-lg">
             {Math.round(rect.width * dpr)} × {Math.round(rect.height * dpr)}
           </span>
         </div>

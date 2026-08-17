@@ -14,9 +14,7 @@ import type { DisplayColorStatus, MonitorRect } from "../../lib/types";
 import { Button } from "../buttons/Button";
 import { Card, SectionLabel } from "./Card";
 import { SegmentedControl } from "./SegmentedControl";
-import { ThemePicker } from "./ThemePicker";
 import { ToggleSwitch } from "./ToggleSwitch";
-import { getTheme } from "../../lib/themes";
 
 export function SettingsView({ onBack }: { onBack: () => void }) {
   const { settings, update } = useSettingsStore();
@@ -112,16 +110,6 @@ export function SettingsView({ onBack }: { onBack: () => void }) {
       </div>
 
       <div className="flex-1 space-y-5 overflow-y-auto px-5 pb-5">
-        {/* -- Appearance -- */}
-        <section>
-          <SectionLabel>Appearance</SectionLabel>
-          <Card>
-            <span>Theme</span>
-            <ThemePicker value={settings.theme} onChange={(theme) => update({ theme })} />
-            <p className="text-text-secondary">{getTheme(settings.theme).description}</p>
-          </Card>
-        </section>
-
         {/* -- Export -- */}
         <section>
           <SectionLabel>Export</SectionLabel>

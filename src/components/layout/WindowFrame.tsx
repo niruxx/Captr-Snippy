@@ -1,7 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { AnimatedBackground } from "../background/AnimatedBackground";
 import { useSettingsStore } from "../../state/settingsStore";
 
 const FADE_MS = 200;
@@ -80,17 +79,12 @@ export function WindowFrame({ children }: { children: ReactNode }) {
   return (
     <WindowChromeContext.Provider value={{ requestClose }}>
       <div
-        className={`h-screen w-screen overflow-hidden rounded-window bg-linear-to-b from-bg-top to-bg-bottom text-text transition-all ${
+        className={`h-screen w-screen overflow-hidden rounded-window border border-border bg-linear-to-b from-bg-top to-bg-bottom text-text shadow-2xl shadow-black/25 transition-all ${
           visible ? "scale-100 opacity-100" : "scale-[0.98] opacity-0"
         }`}
         style={{ transitionDuration: `${FADE_MS}ms`, transitionTimingFunction: "var(--ease-smooth)" }}
       >
-        <AnimatedBackground />
-        {/* relative + z-10: stacks above AnimatedBackground's z-0 layer
-         * regardless of DOM-order tie-breaking - see the z-index note in
-         * MainView.tsx for why an explicit index matters here rather than
-         * relying on paint order alone. */}
-        <div className="relative z-10 flex h-full w-full flex-col">{children}</div>
+        <div className="flex h-full w-full flex-col">{children}</div>
       </div>
     </WindowChromeContext.Provider>
   );

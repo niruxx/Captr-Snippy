@@ -248,7 +248,7 @@ export function PreviewCanvas() {
   }
 
   return (
-    <div className="relative flex h-full w-full items-center justify-center overflow-hidden rounded-card border border-highlight-edge bg-surface p-3.5 shadow-lg shadow-black/10 backdrop-blur-xl">
+    <div className="relative flex h-full w-full items-center justify-center overflow-hidden rounded-card border border-border bg-surface p-3.5 shadow-md shadow-black/8">
       {!screenshot ? (
         <div className="flex flex-col items-center gap-3 text-center">
           <div className="animate-drift rounded-full bg-linear-to-br from-accent/15 to-accent-glow/15 p-5">
@@ -261,7 +261,7 @@ export function PreviewCanvas() {
         </div>
       ) : (
         <div key={captureSeq} className="grid max-h-full max-w-full animate-capture-in place-items-center">
-          <canvas ref={baseRef} className="col-start-1 row-start-1 max-h-full max-w-full rounded-[6px] shadow-lg shadow-black/30" />
+          <canvas ref={baseRef} className="col-start-1 row-start-1 max-h-full max-w-full rounded-[6px] border border-border-soft" />
           <canvas
             ref={overlayRef}
             className="col-start-1 row-start-1 h-full w-full"

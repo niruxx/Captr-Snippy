@@ -81,32 +81,43 @@ export function MainView({ onOpenSettings }: { onOpenSettings: () => void }) {
 
   return (
     <div className="flex h-full flex-col">
-      {/* Nothing but the titlebar sits above the preview now - no status
-       * strip, no shortcuts hint (moved to Settings) - so the preview gets
-       * the full space. A little extra top padding fills in for the row
-       * that used to be here. */}
-      <div className="relative min-h-0 flex-1 overflow-hidden px-5 pt-3 pb-2">
+      {/* In-page top bar (below the native titlebar) - Google Photos keeps
+       * its view-level controls (search, settings, overflow) in a bar of
+       * their own rather than mixed in with primary content, so Settings
+       * and the overflow menu live here instead of alongside the capture
+       * dock. */}
+      <div className="flex shrink-0 items-center justify-between px-5 pt-3 pb-1">
+        <span className="text-sm font-medium text-text-secondary">
+          {screenshot ? "Capture" : "No capture yet"}
+        </span>
+        <div className="flex items-center gap-1">
+          <OverflowMenu />
+          <Button
+            variant="plain"
+            pill
+            icon="settings"
+            iconSize={17}
+            width={34}
+            height={34}
+            aria-label="Settings"
+            title="Settings"
+            onClick={onOpenSettings}
+          />
+        </div>
+      </div>
+
+      <div className="relative min-h-0 flex-1 overflow-hidden px-5 pt-2 pb-2">
         <PreviewCanvas />
         {screenshot && <ContextualToolbar />}
       </div>
 
       <HistoryRail />
 
-      {/* Bottom action row: the capture dock (the tool's primary surface)
-       * centered via a 3-column grid - the empty first column keeps the
-       * center column mathematically centered regardless of the settings
-       * cluster's width in the third, without needing a placeholder brand
-       * label the way the top-docked version did. z-20 + relative: the
-       * settings cluster uses backdrop-blur, which (like any non-none
-       * filter) establishes its own CSS stacking context - without an
-       * explicit z-index here, that context and PreviewCanvas's own
-       * backdrop-blur'd stacking context become same-level siblings
-       * ordered by DOM position, and since the overflow menu now opens
-       * *upward* over the preview, it needs to explicitly outrank it. */}
-      <div className="relative z-20 grid grid-cols-[1fr_auto_1fr] items-center gap-2 px-5 pt-2 pb-2">
-        <div />
-
-        <div className="flex animate-pop-in items-center gap-1.5 justify-self-center rounded-dock border border-highlight-edge bg-surface-strong/90 p-1.5 shadow-lg shadow-black/10 backdrop-blur-xl">
+      {/* Bottom action row: just the capture dock now that Settings/overflow
+       * moved to the top bar - a plain centered flex row instead of the
+       * 3-column grid the settings cluster used to need for balance. */}
+      <div className="flex items-center justify-center px-5 pt-2 pb-3">
+        <div className="flex animate-pop-in items-center gap-1.5 rounded-dock border border-border bg-surface p-1.5 shadow-lg shadow-black/10">
           <Button variant="primary" pill icon="plus" iconSize={14} height={36} className="px-4" disabled={busy} onClick={handleSnip}>
             Snip region
           </Button>
@@ -139,21 +150,6 @@ export function MainView({ onOpenSettings }: { onOpenSettings: () => void }) {
           </Button>
           <div className="mx-0.5 h-6 w-px shrink-0 bg-border-soft" />
           <SegmentedControl options={DELAY_OPTIONS} value={delay} onChange={setDelay} segWidth={36} height={28} />
-        </div>
-
-        <div className="flex items-center gap-0.5 justify-self-end rounded-dock border border-highlight-edge bg-surface-strong/80 p-1 shadow-md shadow-black/10 backdrop-blur-xl">
-          <OverflowMenu />
-          <Button
-            variant="plain"
-            pill
-            icon="settings"
-            iconSize={16}
-            width={32}
-            height={32}
-            aria-label="Settings"
-            title="Settings"
-            onClick={onOpenSettings}
-          />
         </div>
       </div>
 

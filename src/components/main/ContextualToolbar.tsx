@@ -35,7 +35,7 @@ export function ContextualToolbar() {
   const undo = useCaptureStore((s) => s.undo);
 
   return (
-    <div className="absolute bottom-4 left-1/2 flex -translate-x-1/2 animate-pop-in items-center gap-0.5 rounded-full border border-highlight-edge bg-surface-strong/95 px-2.5 py-1.5 shadow-lg shadow-black/20 backdrop-blur-xl">
+    <div className="absolute bottom-4 left-1/2 flex -translate-x-1/2 animate-pop-in items-center gap-0.5 rounded-full border border-border bg-surface-strong px-2.5 py-1.5 shadow-lg shadow-black/15">
       {TOOLS.map(({ name, icon, tip }) => (
         <Button
           key={name}

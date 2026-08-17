@@ -6,13 +6,11 @@ import { Toast } from "./components/common/Toast";
 import { WindowPickerModal } from "./components/common/WindowPickerModal";
 import { OnboardingView } from "./components/onboarding/OnboardingView";
 import { useTheme } from "./hooks/useTheme";
-import { useAccentTheme } from "./hooks/useAccentTheme";
 import { useRecordingEvents } from "./hooks/useRecordingEvents";
 import { useSettingsStore } from "./state/settingsStore";
 
 function App() {
   useTheme();
-  useAccentTheme();
   useRecordingEvents();
   const load = useSettingsStore((s) => s.load);
   const loaded = useSettingsStore((s) => s.loaded);

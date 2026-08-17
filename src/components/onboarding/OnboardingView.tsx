@@ -1,11 +1,10 @@
 import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useSettingsStore } from "../../state/settingsStore";
-import { ThemePicker } from "../settings/ThemePicker";
 import { Button } from "../buttons/Button";
 import { Icon } from "../icons/Icon";
 
-const STEP_COUNT = 3;
+const STEP_COUNT = 2;
 
 /** First-run welcome flow - shown once, gated on `settings.onboarding_complete`
  * (see App.tsx). Finishing (or skipping) just flips that flag through the
@@ -37,9 +36,6 @@ export function OnboardingView() {
       <div key={step} className="flex w-full max-w-md animate-capture-in flex-col items-center gap-5">
         {step === 0 && <WelcomeStep />}
         {step === 1 && (
-          <ThemeStep theme={settings.theme} onChange={(theme) => update({ theme })} />
-        )}
-        {step === 2 && (
           <FolderStep dir={settings.quick_save_dir} onChoose={chooseQuickSaveDir} />
         )}
       </div>
@@ -98,20 +94,6 @@ function WelcomeStep() {
   );
 }
 
-function ThemeStep({ theme, onChange }: { theme: string; onChange: (id: string) => void }) {
-  return (
-    <>
-      <h1 className="text-2xl font-bold tracking-tight">Pick a look</h1>
-      <p className="text-text-secondary">
-        Choose an accent and background - you can always change this later in Settings.
-      </p>
-      <div className="w-full">
-        <ThemePicker value={theme} onChange={onChange} />
-      </div>
-    </>
-  );
-}
-
 function FolderStep({ dir, onChoose }: { dir: string; onChoose: () => void }) {
   return (
     <>
@@ -123,7 +105,7 @@ function FolderStep({ dir, onChoose }: { dir: string; onChoose: () => void }) {
         Quick Save (<kbd className="rounded bg-hover px-1.5 py-0.5 text-xs">Ctrl+Q</kbd>) drops
         every capture here instantly, no dialog.
       </p>
-      <div className="flex w-full items-center gap-2 rounded-2xl border border-highlight-edge bg-surface p-3">
+      <div className="flex w-full items-center gap-2 rounded-2xl border border-border bg-surface p-3">
         <p className="wrap-anywhere flex-1 text-left text-sm text-text-secondary">{dir}</p>
         <Button variant="glass" width={80} height={32} className="text-xs" onClick={onChoose}>
           Change

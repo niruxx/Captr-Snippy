@@ -1,6 +1,6 @@
 # Captr - Screenshot & Screen Recording Studio
 
-A screenshot, annotation, and screen-recording desktop app with a frameless, translucent "glass" UI. Capture a region or the full screen, annotate it, keep a history of recent captures, and record your desktop, a single monitor, or one window to video. Built Windows-first; also builds and runs on Linux (X11, XWayland, and partially native Wayland), with a few platform gaps noted in [Known Gaps](#known-gaps--future-work).
+A screenshot, annotation, and screen-recording desktop app with a clean, card-based UI inspired by Google Photos. Capture a region or the full screen, annotate it, keep a history of recent captures, and record your desktop, a single monitor, or one window to video. Built Windows-first; also builds and runs on Linux (X11, XWayland, and partially native Wayland), with a few platform gaps noted in [Known Gaps](#known-gaps--future-work).
 
 Built with **Tauri 2**, a **Rust** backend, and a **React 19 + TypeScript + Tailwind CSS v4** frontend.
 
@@ -45,12 +45,12 @@ There are no pre-built installers published yet — Captr is currently build-fro
 - **Show cursor in recordings**: an opt-in toggle composites the live mouse cursor into recorded frames (off by default, since xcap's own capture never includes it) — stills are unaffected
 
 ### Look & Feel
-- **Automatic light/dark theme** that follows the Windows appearance setting and switches live, no restart needed
-- **4 accent themes** — Classic (violet-on-glass, no animated background), Aurora, Snowfall, and Sunset — each pairing an accent color with its own animated background, switchable anytime in Settings → Appearance and applied to every window including the titlebar
-- Frameless, translucent **"glass" window** with custom traffic-light window controls, centered on screen at launch
-- **First-run onboarding**: a short welcome → theme picker → quick-save-folder flow shown once, on the very first launch
+- **Google Photos-inspired design**: flat white/near-black cards with soft neutral elevation shadows on a light gray (or dark gray) canvas — no glass, no blur, no colored glow, in either theme
+- **Automatic light/dark theme** that follows the Windows appearance setting and switches live, no restart needed — both are the same Google Photos-style system, just inverted
+- A top bar houses Settings and the overflow menu, and a compact **history grid** (Google Photos' signature pattern) replaces a plain thumbnail strip
+- Frameless custom window chrome with traffic-light window controls, centered on screen at launch
+- **First-run onboarding**: a short welcome → quick-save-folder flow shown once, on the very first launch
 - Capture and recording controls are docked in a **bottom action bar** so the preview canvas gets the most screen space
-- **Fade-in on launch, fade-out on close**, and sliding transitions between the main and Settings views
 - Per-monitor DPI aware, so region capture and UI scaling stay pixel-accurate on HiDPI/mixed-DPI setups
 
 ### Background & Startup
@@ -135,7 +135,7 @@ The same list is also shown in-app under **Settings → Shortcuts**.
 | `Ctrl+Alt+R` | Start / stop screen recording (global — works even when Captr isn't focused) |
 | `Ctrl+Alt+P` | Pause / resume screen recording (global) |
 
-![Settings — Appearance](screenshots/03-settings-appearance.png)
+![Settings — Export](screenshots/03-settings-export.png)
 
 ## Configuration (`settings.json`)
 
@@ -143,7 +143,6 @@ Every setting in the Settings screen is persisted to `settings.json` in the app'
 
 | Key | GUI control? | Values / notes |
 | --- | --- | --- |
-| `theme` | Yes (Settings → Appearance) | `"classic"`, `"aurora"`, `"snowfall"`, or `"sunset"` |
 | `onboarding_complete` | No (set automatically) | `true`/`false` — whether the first-run onboarding flow has been completed or skipped |
 | `export_format` | Yes (Settings → Export) | `"PNG"`, `"JPEG"`, `"WEBP"`, or `"BMP"` |
 | `quality` | Yes (Settings → Export) | `40`-`100`; only applies to JPEG/WEBP exports |

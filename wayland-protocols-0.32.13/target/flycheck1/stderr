@@ -1,6 +1,7 @@
     Blocking waiting for file lock on package cache
-   0.096793300s  INFO prepare_target{force=false package_id=wayland-protocols v0.32.13 (C:\Users\niruxxdaboi\Documents\GitHub\Snippy-Evolved\wayland-protocols-0.32.13) target="wayland_protocols"}: cargo::core::compiler::fingerprint: fingerprint error for wayland-protocols v0.32.13 (C:\Users\niruxxdaboi\Documents\GitHub\Snippy-Evolved\wayland-protocols-0.32.13)/Check { test: false }/TargetInner { ..: lib_target("wayland_protocols", ["lib"], "C:\\Users\\niruxxdaboi\\Documents\\GitHub\\Snippy-Evolved\\wayland-protocols-0.32.13\\src\\lib.rs", Edition2024) }
-   0.096844300s  INFO prepare_target{force=false package_id=wayland-protocols v0.32.13 (C:\Users\niruxxdaboi\Documents\GitHub\Snippy-Evolved\wayland-protocols-0.32.13) target="wayland_protocols"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\niruxxdaboi\Documents\GitHub\Snippy-Evolved\wayland-protocols-0.32.13\target\debug\.fingerprint\wayland-protocols-97a73b44462d471f\lib-wayland_protocols`
+    Blocking waiting for file lock on package cache
+   0.115598400s  INFO prepare_target{force=false package_id=wayland-protocols v0.32.13 (C:\Users\niruxxdaboi\Documents\GitHub\Snippy-Evolved\wayland-protocols-0.32.13) target="wayland_protocols"}: cargo::core::compiler::fingerprint: fingerprint error for wayland-protocols v0.32.13 (C:\Users\niruxxdaboi\Documents\GitHub\Snippy-Evolved\wayland-protocols-0.32.13)/Check { test: false }/TargetInner { ..: lib_target("wayland_protocols", ["lib"], "C:\\Users\\niruxxdaboi\\Documents\\GitHub\\Snippy-Evolved\\wayland-protocols-0.32.13\\src\\lib.rs", Edition2024) }
+   0.115641400s  INFO prepare_target{force=false package_id=wayland-protocols v0.32.13 (C:\Users\niruxxdaboi\Documents\GitHub\Snippy-Evolved\wayland-protocols-0.32.13) target="wayland_protocols"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\niruxxdaboi\Documents\GitHub\Snippy-Evolved\wayland-protocols-0.32.13\target\debug\.fingerprint\wayland-protocols-97a73b44462d471f\lib-wayland_protocols`
 
 Caused by:
     The system cannot find the file specified. (os error 2)
@@ -27,8 +28,8 @@ Stack backtrace:
   18: git_midx_writer_dump
   19: BaseThreadInitThunk
   20: RtlUserThreadStart
-   0.106869600s  INFO prepare_target{force=false package_id=wayland-backend v0.3.15 target="wayland_backend"}: cargo::core::compiler::fingerprint: fingerprint error for wayland-backend v0.3.15/Check { test: false }/TargetInner { ..: lib_target("wayland_backend", ["lib"], "C:\\Users\\niruxxdaboi\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\wayland-backend-0.3.15\\src\\lib.rs", Edition2021) }
-   0.106891600s  INFO prepare_target{force=false package_id=wayland-backend v0.3.15 target="wayland_backend"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\niruxxdaboi\Documents\GitHub\Snippy-Evolved\wayland-protocols-0.32.13\target\debug\.fingerprint\wayland-backend-be09e35e70b38c9d\lib-wayland_backend`
+   0.120973800s  INFO prepare_target{force=false package_id=wayland-backend v0.3.15 target="wayland_backend"}: cargo::core::compiler::fingerprint: fingerprint error for wayland-backend v0.3.15/Check { test: false }/TargetInner { ..: lib_target("wayland_backend", ["lib"], "C:\\Users\\niruxxdaboi\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\wayland-backend-0.3.15\\src\\lib.rs", Edition2021) }
+   0.120989800s  INFO prepare_target{force=false package_id=wayland-backend v0.3.15 target="wayland_backend"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\niruxxdaboi\Documents\GitHub\Snippy-Evolved\wayland-protocols-0.32.13\target\debug\.fingerprint\wayland-backend-be09e35e70b38c9d\lib-wayland_backend`
 
 Caused by:
     The system cannot find the file specified. (os error 2)
@@ -56,8 +57,8 @@ Stack backtrace:
   19: git_midx_writer_dump
   20: BaseThreadInitThunk
   21: RtlUserThreadStart
-   0.130887100s  INFO prepare_target{force=false package_id=wayland-sys v0.31.11 target="wayland_sys"}: cargo::core::compiler::fingerprint: fingerprint error for wayland-sys v0.31.11/Check { test: false }/TargetInner { ..: lib_target("wayland_sys", ["lib"], "C:\\Users\\niruxxdaboi\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\wayland-sys-0.31.11\\src\\lib.rs", Edition2021) }
-   0.130909600s  INFO prepare_target{force=false package_id=wayland-sys v0.31.11 target="wayland_sys"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\niruxxdaboi\Documents\GitHub\Snippy-Evolved\wayland-protocols-0.32.13\target\debug\.fingerprint\wayland-sys-b956aae07e931580\lib-wayland_sys`
+   0.123711000s  INFO prepare_target{force=false package_id=wayland-sys v0.31.11 target="wayland_sys"}: cargo::core::compiler::fingerprint: fingerprint error for wayland-sys v0.31.11/Check { test: false }/TargetInner { ..: lib_target("wayland_sys", ["lib"], "C:\\Users\\niruxxdaboi\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\wayland-sys-0.31.11\\src\\lib.rs", Edition2021) }
+   0.123725700s  INFO prepare_target{force=false package_id=wayland-sys v0.31.11 target="wayland_sys"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\niruxxdaboi\Documents\GitHub\Snippy-Evolved\wayland-protocols-0.32.13\target\debug\.fingerprint\wayland-sys-b956aae07e931580\lib-wayland_sys`
 
 Caused by:
     The system cannot find the file specified. (os error 2)
@@ -86,8 +87,8 @@ Stack backtrace:
   20: git_midx_writer_dump
   21: BaseThreadInitThunk
   22: RtlUserThreadStart
-   0.135434400s  INFO prepare_target{force=false package_id=wayland-protocols v0.32.13 (C:\Users\niruxxdaboi\Documents\GitHub\Snippy-Evolved\wayland-protocols-0.32.13) target="wayland_protocols"}: cargo::core::compiler::fingerprint: fingerprint error for wayland-protocols v0.32.13 (C:\Users\niruxxdaboi\Documents\GitHub\Snippy-Evolved\wayland-protocols-0.32.13)/Check { test: true }/TargetInner { ..: lib_target("wayland_protocols", ["lib"], "C:\\Users\\niruxxdaboi\\Documents\\GitHub\\Snippy-Evolved\\wayland-protocols-0.32.13\\src\\lib.rs", Edition2024) }
-   0.135456100s  INFO prepare_target{force=false package_id=wayland-protocols v0.32.13 (C:\Users\niruxxdaboi\Documents\GitHub\Snippy-Evolved\wayland-protocols-0.32.13) target="wayland_protocols"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\niruxxdaboi\Documents\GitHub\Snippy-Evolved\wayland-protocols-0.32.13\target\debug\.fingerprint\wayland-protocols-8fc95a0ec6580804\test-lib-wayland_protocols`
+   0.126598300s  INFO prepare_target{force=false package_id=wayland-protocols v0.32.13 (C:\Users\niruxxdaboi\Documents\GitHub\Snippy-Evolved\wayland-protocols-0.32.13) target="wayland_protocols"}: cargo::core::compiler::fingerprint: fingerprint error for wayland-protocols v0.32.13 (C:\Users\niruxxdaboi\Documents\GitHub\Snippy-Evolved\wayland-protocols-0.32.13)/Check { test: true }/TargetInner { ..: lib_target("wayland_protocols", ["lib"], "C:\\Users\\niruxxdaboi\\Documents\\GitHub\\Snippy-Evolved\\wayland-protocols-0.32.13\\src\\lib.rs", Edition2024) }
+   0.126614200s  INFO prepare_target{force=false package_id=wayland-protocols v0.32.13 (C:\Users\niruxxdaboi\Documents\GitHub\Snippy-Evolved\wayland-protocols-0.32.13) target="wayland_protocols"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\niruxxdaboi\Documents\GitHub\Snippy-Evolved\wayland-protocols-0.32.13\target\debug\.fingerprint\wayland-protocols-8fc95a0ec6580804\test-lib-wayland_protocols`
 
 Caused by:
     The system cannot find the file specified. (os error 2)

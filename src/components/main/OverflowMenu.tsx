@@ -31,17 +31,14 @@ export function OverflowMenu() {
         pill
         icon="more"
         iconSize={17}
-        width={36}
+        width={34}
         height={34}
         aria-label="More actions"
         title="More actions"
         onClick={() => setOpen((v) => !v)}
       />
       {open && (
-        // Opens upward (bottom-full, not top-full): this menu now lives in
-        // the bottom action dock, so a downward dropdown would render
-        // partly or fully outside the window instead of over the preview.
-        <div className="absolute bottom-full right-0 z-50 mb-2 w-56 origin-bottom-right animate-pop-in rounded-2xl border border-highlight-edge bg-surface-strong/95 p-1.5 shadow-xl shadow-black/20 backdrop-blur-xl">
+        <div className="absolute top-full right-0 z-50 mt-2 w-56 origin-top-right animate-pop-in rounded-2xl border border-border bg-surface-strong p-1.5 shadow-xl shadow-black/15">
           <MenuItem label="Save As…" hint="Ctrl+S" onClick={() => run(saveAs)} />
           <MenuItem label="Quick Save" hint="Ctrl+Q" onClick={() => run(quickSave)} />
           <MenuItem label="Copy to Clipboard" hint="Ctrl+C" onClick={() => run(copyToClipboard)} />

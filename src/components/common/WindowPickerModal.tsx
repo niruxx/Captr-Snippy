@@ -20,8 +20,8 @@ export function WindowPickerModal() {
   }
 
   return (
-    <div className="absolute inset-0 z-50 flex animate-pop-in items-center justify-center bg-black/50 backdrop-blur-sm">
-      <div className="flex max-h-[80%] w-80 flex-col overflow-hidden rounded-2xl border border-highlight-edge bg-surface-strong/95 shadow-2xl shadow-black/40 backdrop-blur-xl">
+    <div className="absolute inset-0 z-50 flex animate-pop-in items-center justify-center bg-black/50">
+      <div className="flex max-h-[80%] w-80 flex-col overflow-hidden rounded-2xl border border-border bg-surface-strong shadow-2xl shadow-black/30">
         <div className="px-4 pt-4 pb-2 text-sm font-semibold">Choose a window to record</div>
         <div className="flex-1 overflow-y-auto px-2 pb-2">
           {windows.length === 0 && (
