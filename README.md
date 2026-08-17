@@ -1,4 +1,4 @@
-# Snippy - Screenshot & Screen Recording Studio
+# Captr - Screenshot & Screen Recording Studio
 
 A screenshot, annotation, and screen-recording desktop app with a frameless, translucent "glass" UI. Capture a region or the full screen, annotate it, keep a history of recent captures, and record your desktop, a single monitor, or one window to video. Built Windows-first; also builds and runs on Linux (X11, XWayland, and partially native Wayland), with a few platform gaps noted in [Known Gaps](#known-gaps--future-work).
 
@@ -8,7 +8,7 @@ Built with **Tauri 2**, a **Rust** backend, and a **React 19 + TypeScript + Tail
 
 ## Getting the app
 
-There are no pre-built installers published yet — Snippy is currently build-from-source only. See [Setup](#setup) below to build it yourself; a release pipeline may come later.
+There are no pre-built installers published yet — Captr is currently build-from-source only. See [Setup](#setup) below to build it yourself; a release pipeline may come later.
 
 ## Features
 
@@ -41,7 +41,7 @@ There are no pre-built installers published yet — Snippy is currently build-fr
 - **Frame rate presets from 15 up to 240 fps** (to match high-refresh-rate displays), or any custom value via `settings.json`
 - **Pause / resume** mid-recording — paused time is excised entirely, not frozen or gapped in the output
 - A small floating, **draggable** control bar (timer, pause, stop) that's genuinely excluded from the recording itself via `SetWindowDisplayAffinity`
-- **Global hotkeys** for start/stop and pause/resume that work even when Snippy isn't the focused window
+- **Global hotkeys** for start/stop and pause/resume that work even when Captr isn't the focused window
 - **Show cursor in recordings**: an opt-in toggle composites the live mouse cursor into recorded frames (off by default, since xcap's own capture never includes it) — stills are unaffected
 
 ### Look & Feel
@@ -54,8 +54,8 @@ There are no pre-built installers published yet — Snippy is currently build-fr
 - Per-monitor DPI aware, so region capture and UI scaling stay pixel-accurate on HiDPI/mixed-DPI setups
 
 ### Background & Startup
-- **Launch at startup**: registers Snippy to start automatically on sign-in (Settings → General), via the OS's own startup mechanism — not mirrored into `settings.json`, so it can't drift out of sync with what's actually registered
-- **Minimize to tray**: an opt-in toggle makes closing the window hide it to a tray icon instead of quitting, so global hotkeys and an in-progress recording keep working with no window open — bring it back from the tray icon (left-click or "Show Snippy"), or "Quit" from there to exit for real
+- **Launch at startup**: registers Captr to start automatically on sign-in (Settings → General), via the OS's own startup mechanism — not mirrored into `settings.json`, so it can't drift out of sync with what's actually registered
+- **Minimize to tray**: an opt-in toggle makes closing the window hide it to a tray icon instead of quitting, so global hotkeys and an in-progress recording keep working with no window open — bring it back from the tray icon (left-click or "Show Captr"), or "Quit" from there to exit for real
 
 ## Prerequisites
 
@@ -72,8 +72,8 @@ There are no pre-built installers published yet — Snippy is currently build-fr
 ## Setup
 
 ```bash
-git clone https://github.com/niruxx/Snippy.git
-cd Snippy
+git clone https://github.com/niruxx/Captr-Snippy.git
+cd Captr-Snippy
 npm install
 ```
 
@@ -93,7 +93,7 @@ npm run tauri dev
 npm run tauri build
 ```
 
-This compiles the Rust backend in release mode, bundles the frontend, and produces a Windows installer (NSIS `.exe` and MSI) plus a standalone `snippy.exe` under `src-tauri/target/release/bundle/`. The standalone `.exe` at `src-tauri/target/release/snippy.exe` can also be run directly without installing.
+This compiles the Rust backend in release mode, bundles the frontend, and produces a Windows installer (NSIS `.exe` and MSI) plus a standalone `captr.exe` under `src-tauri/target/release/bundle/`. The standalone `.exe` at `src-tauri/target/release/captr.exe` can also be run directly without installing.
 
 ### Capturing a Screenshot
 
@@ -114,7 +114,7 @@ This compiles the Rust backend in release mode, bundles the frontend, and produc
    - **Video format**: MP4, MKV, FLV, or WebM
    - **Frame rate**: a preset from 15-240 fps (match your display's refresh rate for the smoothest capture)
 2. Click **⏺ Record** (or press `Ctrl+Alt+R`) to start
-3. Snippy's window hides and a small floating control bar appears with a timer, pause/resume, and stop buttons — drag it anywhere, it won't show up in the recording
+3. Captr's window hides and a small floating control bar appears with a timer, pause/resume, and stop buttons — drag it anywhere, it won't show up in the recording
 4. Use the bar's pause button, or `Ctrl+Alt+P`, to pause and resume — paused time is not included in the output
 5. Click stop, or `Ctrl+Alt+R` again, to finish; the recording is saved into your Quick save folder
 
@@ -132,14 +132,14 @@ The same list is also shown in-app under **Settings → Shortcuts**.
 | `Ctrl+C` | Copy capture to clipboard |
 | `Ctrl+Z` | Undo last annotation |
 | `Delete` | Remove the current capture from history |
-| `Ctrl+Alt+R` | Start / stop screen recording (global — works even when Snippy isn't focused) |
+| `Ctrl+Alt+R` | Start / stop screen recording (global — works even when Captr isn't focused) |
 | `Ctrl+Alt+P` | Pause / resume screen recording (global) |
 
 ![Settings — Appearance](screenshots/03-settings-appearance.png)
 
 ## Configuration (`settings.json`)
 
-Every setting in the Settings screen is persisted to `settings.json` in the app's per-user config directory (`%APPDATA%\com.snippy.desktop\settings.json` on Windows), and the file can be hand-edited too — each key is validated independently on load, so an edit it doesn't understand for one key still keeps the rest intact.
+Every setting in the Settings screen is persisted to `settings.json` in the app's per-user config directory (`%APPDATA%\com.captr.desktop\settings.json` on Windows), and the file can be hand-edited too — each key is validated independently on load, so an edit it doesn't understand for one key still keeps the rest intact.
 
 | Key | GUI control? | Values / notes |
 | --- | --- | --- |

@@ -89,7 +89,7 @@ function WelcomeStep() {
       <div className="animate-drift rounded-full bg-linear-to-br from-accent/20 to-accent-glow/20 p-6">
         <Icon name="fullscreen" size={36} className="text-accent" />
       </div>
-      <h1 className="text-2xl font-bold tracking-tight">Welcome to Snippy</h1>
+      <h1 className="text-2xl font-bold tracking-tight">Welcome to Captr</h1>
       <p className="text-text-secondary">
         Capture, annotate, and record your screen in seconds. Let's get a couple of things set
         up before your first snip.

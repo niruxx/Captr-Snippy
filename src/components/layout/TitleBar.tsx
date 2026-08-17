@@ -26,7 +26,7 @@ export function TitleBar() {
     <div data-tauri-drag-region="deep" className="flex h-9 shrink-0 select-none items-center pl-4">
       <span className="flex items-center gap-2">
         <span className="h-2 w-2 rounded-full bg-linear-to-br from-accent to-accent-glow shadow-[0_0_8px_var(--accent-glow-shadow)]" />
-        <span className="text-[13px] font-semibold tracking-tight text-text-secondary">Snippy</span>
+        <span className="text-[13px] font-semibold tracking-tight text-text-secondary">Captr</span>
       </span>
       <div className="flex-1" />
       <div className="flex items-center gap-0.5 pr-2">

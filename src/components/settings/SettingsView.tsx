@@ -204,7 +204,7 @@ export function SettingsView({ onBack }: { onBack: () => void }) {
                 <span>Launch at startup</span>
                 <ToggleSwitch checked={autostart} onChange={toggleAutostart} />
               </div>
-              <p className="text-text-secondary">Starts Snippy automatically when you sign in.</p>
+              <p className="text-text-secondary">Starts Captr automatically when you sign in.</p>
             </Card>
             <Card>
               <div className="flex items-center justify-between">

@@ -43,7 +43,7 @@ export function WindowFrame({ children }: { children: ReactNode }) {
     }).then((fn) => {
       unlistenClose = fn;
     }).catch((err) => console.error("onCloseRequested() failed:", err));
-    // The tray icon's "Show Snippy" / left-click calls the native
+    // The tray icon's "Show Captr" / left-click calls the native
     // window.show()+set_focus() directly from Rust, bypassing this
     // component entirely - without this, `visible` would stay stuck false
     // (still faded-out) the next time the window reappears from the tray.
@@ -63,7 +63,7 @@ export function WindowFrame({ children }: { children: ReactNode }) {
   function requestClose() {
     if (closingRef.current) return;
     // "Minimize to tray" only hides the window (the tray icon's "Show
-    // Snippy" / left-click brings it back); a real close still fully quits,
+    // Captr" / left-click brings it back); a real close still fully quits,
     // matching this being purely a UX preference, not a background-service
     // mode.
     const closeToTray = useSettingsStore.getState().settings?.close_to_tray;

@@ -1,0 +1,118 @@
+    Blocking waiting for file lock on package cache
+   0.096793300s  INFO prepare_target{force=false package_id=wayland-protocols v0.32.13 (C:\Users\niruxxdaboi\Documents\GitHub\Snippy-Evolved\wayland-protocols-0.32.13) target="wayland_protocols"}: cargo::core::compiler::fingerprint: fingerprint error for wayland-protocols v0.32.13 (C:\Users\niruxxdaboi\Documents\GitHub\Snippy-Evolved\wayland-protocols-0.32.13)/Check { test: false }/TargetInner { ..: lib_target("wayland_protocols", ["lib"], "C:\\Users\\niruxxdaboi\\Documents\\GitHub\\Snippy-Evolved\\wayland-protocols-0.32.13\\src\\lib.rs", Edition2024) }
+   0.096844300s  INFO prepare_target{force=false package_id=wayland-protocols v0.32.13 (C:\Users\niruxxdaboi\Documents\GitHub\Snippy-Evolved\wayland-protocols-0.32.13) target="wayland_protocols"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\niruxxdaboi\Documents\GitHub\Snippy-Evolved\wayland-protocols-0.32.13\target\debug\.fingerprint\wayland-protocols-97a73b44462d471f\lib-wayland_protocols`
+
+Caused by:
+    The system cannot find the file specified. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_libgit2_prerelease
+  12: <unknown>
+  13: <unknown>
+  14: <unknown>
+  15: <unknown>
+  16: git_midx_writer_dump
+  17: git_filter_source_repo
+  18: git_midx_writer_dump
+  19: BaseThreadInitThunk
+  20: RtlUserThreadStart
+   0.106869600s  INFO prepare_target{force=false package_id=wayland-backend v0.3.15 target="wayland_backend"}: cargo::core::compiler::fingerprint: fingerprint error for wayland-backend v0.3.15/Check { test: false }/TargetInner { ..: lib_target("wayland_backend", ["lib"], "C:\\Users\\niruxxdaboi\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\wayland-backend-0.3.15\\src\\lib.rs", Edition2021) }
+   0.106891600s  INFO prepare_target{force=false package_id=wayland-backend v0.3.15 target="wayland_backend"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\niruxxdaboi\Documents\GitHub\Snippy-Evolved\wayland-protocols-0.32.13\target\debug\.fingerprint\wayland-backend-be09e35e70b38c9d\lib-wayland_backend`
+
+Caused by:
+    The system cannot find the file specified. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_libgit2_prerelease
+  13: <unknown>
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: git_midx_writer_dump
+  18: git_filter_source_repo
+  19: git_midx_writer_dump
+  20: BaseThreadInitThunk
+  21: RtlUserThreadStart
+   0.130887100s  INFO prepare_target{force=false package_id=wayland-sys v0.31.11 target="wayland_sys"}: cargo::core::compiler::fingerprint: fingerprint error for wayland-sys v0.31.11/Check { test: false }/TargetInner { ..: lib_target("wayland_sys", ["lib"], "C:\\Users\\niruxxdaboi\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\wayland-sys-0.31.11\\src\\lib.rs", Edition2021) }
+   0.130909600s  INFO prepare_target{force=false package_id=wayland-sys v0.31.11 target="wayland_sys"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\niruxxdaboi\Documents\GitHub\Snippy-Evolved\wayland-protocols-0.32.13\target\debug\.fingerprint\wayland-sys-b956aae07e931580\lib-wayland_sys`
+
+Caused by:
+    The system cannot find the file specified. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_filter_source_repo
+  12: git_filter_source_repo
+  13: git_libgit2_prerelease
+  14: <unknown>
+  15: <unknown>
+  16: <unknown>
+  17: <unknown>
+  18: git_midx_writer_dump
+  19: git_filter_source_repo
+  20: git_midx_writer_dump
+  21: BaseThreadInitThunk
+  22: RtlUserThreadStart
+   0.135434400s  INFO prepare_target{force=false package_id=wayland-protocols v0.32.13 (C:\Users\niruxxdaboi\Documents\GitHub\Snippy-Evolved\wayland-protocols-0.32.13) target="wayland_protocols"}: cargo::core::compiler::fingerprint: fingerprint error for wayland-protocols v0.32.13 (C:\Users\niruxxdaboi\Documents\GitHub\Snippy-Evolved\wayland-protocols-0.32.13)/Check { test: true }/TargetInner { ..: lib_target("wayland_protocols", ["lib"], "C:\\Users\\niruxxdaboi\\Documents\\GitHub\\Snippy-Evolved\\wayland-protocols-0.32.13\\src\\lib.rs", Edition2024) }
+   0.135456100s  INFO prepare_target{force=false package_id=wayland-protocols v0.32.13 (C:\Users\niruxxdaboi\Documents\GitHub\Snippy-Evolved\wayland-protocols-0.32.13) target="wayland_protocols"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\niruxxdaboi\Documents\GitHub\Snippy-Evolved\wayland-protocols-0.32.13\target\debug\.fingerprint\wayland-protocols-8fc95a0ec6580804\test-lib-wayland_protocols`
+
+Caused by:
+    The system cannot find the file specified. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_libgit2_prerelease
+  12: <unknown>
+  13: <unknown>
+  14: <unknown>
+  15: <unknown>
+  16: git_midx_writer_dump
+  17: git_filter_source_repo
+  18: git_midx_writer_dump
+  19: BaseThreadInitThunk
+  20: RtlUserThreadStart
+    Checking wayland-sys v0.31.11
+error: could not compile `wayland-sys` (lib) due to 1 previous error

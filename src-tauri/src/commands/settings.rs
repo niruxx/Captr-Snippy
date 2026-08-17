@@ -79,14 +79,14 @@ impl Settings {
 fn default_quick_save_dir(app: &AppHandle) -> String {
     app.path()
         .picture_dir()
-        .map(|d| d.join("Snippy"))
-        .unwrap_or_else(|_| PathBuf::from("Snippy"))
+        .map(|d| d.join("Captr"))
+        .unwrap_or_else(|_| PathBuf::from("Captr"))
         .to_string_lossy()
         .into_owned()
 }
 
 /// The settings file's permanent home: the OS-standard per-user config
-/// directory, e.g. `%APPDATA%/com.snippy.desktop/settings.json` on Windows.
+/// directory, e.g. `%APPDATA%/com.captr.desktop/settings.json` on Windows.
 fn settings_path(app: &AppHandle) -> PathBuf {
     let dir = app
         .path()

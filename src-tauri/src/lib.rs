@@ -70,7 +70,7 @@ pub fn run() {
             // with no window open; WindowFrame.tsx's close handler hides
             // rather than closes when that setting is on, and this is what
             // gets the window back (or exits for real via "Quit").
-            let show_item = MenuItem::with_id(app, "show", "Show Snippy", true, None::<&str>)?;
+            let show_item = MenuItem::with_id(app, "show", "Show Captr", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let tray_menu = Menu::with_items(app, &[&show_item, &quit_item])?;
 
@@ -83,7 +83,7 @@ pub fn run() {
 
             TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
-                .tooltip("Snippy")
+                .tooltip("Captr")
                 .menu(&tray_menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(move |app, event| match event.id.as_ref() {

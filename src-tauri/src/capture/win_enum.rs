@@ -116,7 +116,7 @@ mod windows_impl {
                     return TRUE;
                 }
                 let title = String::from_utf16_lossy(&buf[..copied as usize]);
-                if !title.is_empty() && title != "Snippy" {
+                if !title.is_empty() && title != "Captr" {
                     windows.push(WindowEntry {
                         hwnd: hwnd.0 as i64,
                         title,
@@ -220,7 +220,7 @@ mod linux_impl {
                     return None;
                 }
                 let title = window.title().ok()?;
-                if title.is_empty() || title == "Snippy" {
+                if title.is_empty() || title == "Captr" {
                     return None;
                 }
                 let id = window.id().ok()?;

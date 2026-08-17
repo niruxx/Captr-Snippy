@@ -471,6 +471,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "captr"
+version = "0.2.0"
+dependencies = [
+ "base64 0.23.1",
+ "image",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-autostart",
+ "tauri-plugin-clipboard-manager",
+ "tauri-plugin-dialog",
+ "tauri-plugin-global-shortcut",
+ "tauri-plugin-opener",
+ "wayland-client",
+ "wayland-protocols",
+ "webp",
+ "windows 0.61.3",
+ "xcap",
+ "xcb",
+]
+
+[[package]]
 name = "cargo-platform"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3974,29 +3997,6 @@ name = "smallvec"
 version = "1.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
-
-[[package]]
-name = "snippy"
-version = "0.2.0"
-dependencies = [
- "base64 0.23.1",
- "image",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-autostart",
- "tauri-plugin-clipboard-manager",
- "tauri-plugin-dialog",
- "tauri-plugin-global-shortcut",
- "tauri-plugin-opener",
- "wayland-client",
- "wayland-protocols",
- "webp",
- "windows 0.61.3",
- "xcap",
- "xcb",
-]
 
 [[package]]
 name = "socket2"
